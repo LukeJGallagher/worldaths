@@ -17,7 +17,8 @@ from what_it_takes_to_win import WhatItTakesToWin
 try:
     from data_connector import (
         get_ksa_athletes, get_data_mode, query as duckdb_query,
-        get_rankings_data, get_ksa_rankings, get_benchmarks_data
+        get_rankings_data, get_ksa_rankings, get_benchmarks_data,
+        get_road_to_tokyo_data
     )
     DATA_CONNECTOR_AVAILABLE = True
 except ImportError:
@@ -178,7 +179,17 @@ def load_athlete_profiles():
 
 @st.cache_data
 def load_road_to_data():
-    """Load Road to Tokyo qualification data."""
+    """Load Road to Tokyo qualification data from Azure or local CSV."""
+    # Try Azure parquet first
+    if DATA_CONNECTOR_AVAILABLE:
+        try:
+            df = get_road_to_tokyo_data()
+            if df is not None and not df.empty:
+                return df
+        except Exception as e:
+            st.warning(f"Azure road to tokyo error: {e}")
+
+    # Fall back to local CSV files
     try:
         road_to_path = os.path.join(DATA_DIR, 'road_to')
         if os.path.exists(road_to_path):
@@ -199,7 +210,17 @@ def load_road_to_data():
 
 @st.cache_data
 def load_qualification_standards():
-    """Load qualification standards for events."""
+    """Load qualification standards from Azure or local CSV."""
+    # Try Azure benchmarks first
+    if DATA_CONNECTOR_AVAILABLE:
+        try:
+            df = get_benchmarks_data()
+            if df is not None and not df.empty:
+                return df
+        except Exception as e:
+            st.warning(f"Azure benchmarks error: {e}")
+
+    # Fall back to local CSV
     try:
         qual_path = os.path.join(DATA_DIR, 'qualification_processes', 'qualification_processes_summary.csv')
         if os.path.exists(qual_path):
@@ -782,21 +803,29 @@ with tab4:
 with tab5:
     st.header('Road to Tokyo 2025')
 
+    # Show data source indicator
+    mode = get_data_mode() if DATA_CONNECTOR_AVAILABLE else 'local'
+
     if not road_to_df.empty:
-        st.success(f"Loaded {len(road_to_df):,} qualification records")
+        st.success(f"Loaded {len(road_to_df):,} qualification records from {mode} data source")
 
         # Filters
         col1, col2 = st.columns(2)
 
+        selected_event_rt = "All Events"
+        selected_fed = []
+
         with col1:
             if 'Actual_Event_Name' in road_to_df.columns:
                 events_rt = sorted(road_to_df['Actual_Event_Name'].dropna().unique())
-                selected_event_rt = st.selectbox("Select Event", ["All Events"] + events_rt, key="road_to_event")
+                selected_event_rt = st.selectbox("Select Event", ["All Events"] + list(events_rt), key="road_to_event")
 
         with col2:
             if 'Federation' in road_to_df.columns:
                 federations = sorted(road_to_df['Federation'].dropna().unique())
-                selected_fed = st.multiselect("Select Federations", federations, default=['KSA'] if 'KSA' in federations else federations[:5])
+                # Default to KSA if available
+                default_feds = ['KSA'] if 'KSA' in federations else list(federations[:5])
+                selected_fed = st.multiselect("Select Federations", federations, default=default_feds)
 
         # Filter data
         filtered_rt = road_to_df.copy()
@@ -817,20 +846,28 @@ with tab5:
             st.metric("Events", events_count)
 
         # Show data
-        display_cols = [col for col in ['Actual_Event_Name', 'Federation', 'Athlete', 'Qualification_Status', 'Status'] if col in filtered_rt.columns]
+        display_cols = [col for col in ['Actual_Event_Name', 'Federation', 'Athlete', 'Qualification_Status', 'Status', 'Details'] if col in filtered_rt.columns]
         st.dataframe(filtered_rt[display_cols].drop_duplicates(), use_container_width=True)
 
     else:
-        st.warning("No Road to Tokyo data found. Check the data folder structure.")
+        st.warning("No Road to Tokyo data found. Data may still be loading from Azure.")
 
-    # Show qualification standards
+    # Show qualification standards (from benchmarks parquet)
     if not qual_standards_df.empty:
-        st.subheader("Tokyo 2025 Qualification Standards")
+        st.subheader("Performance Standards")
 
-        display_qual = qual_standards_df[['Display_Name', 'entry_number', 'entry_standard', 'maximum_quota', 'athletes_by_entry_standard']].copy()
-        display_qual.columns = ['Event', 'Entry Quota', 'Entry Standard', 'Max per Country', 'Qualified by Standard']
-
-        st.dataframe(display_qual, use_container_width=True, hide_index=True)
+        # Check which columns exist (benchmarks parquet has different structure)
+        if 'Event' in qual_standards_df.columns and 'Gold Standard' in qual_standards_df.columns:
+            # Using benchmarks parquet format
+            display_cols = [col for col in ['Event', 'Gender', 'Gold Standard', 'Silver Standard', 'Bronze Standard', 'Final Standard (8th)'] if col in qual_standards_df.columns]
+            st.dataframe(qual_standards_df[display_cols], use_container_width=True, hide_index=True)
+        elif 'Display_Name' in qual_standards_df.columns:
+            # Using old CSV format
+            display_qual = qual_standards_df[['Display_Name', 'entry_number', 'entry_standard', 'maximum_quota', 'athletes_by_entry_standard']].copy()
+            display_qual.columns = ['Event', 'Entry Quota', 'Entry Standard', 'Max per Country', 'Qualified by Standard']
+            st.dataframe(display_qual, use_container_width=True, hide_index=True)
+        else:
+            st.dataframe(qual_standards_df, use_container_width=True, hide_index=True)
 
 ###################################
 # Tab 6: Major Games Analytics

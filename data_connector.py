@@ -505,6 +505,40 @@ def get_benchmarks_data() -> pd.DataFrame:
     return query("SELECT * FROM benchmarks WHERE source_table != 'metadata'")
 
 
+def get_road_to_tokyo_data(federation: str = None) -> pd.DataFrame:
+    """
+    Get Road to Tokyo qualification data from road_to_tokyo.parquet.
+
+    Args:
+        federation: Filter by federation code like 'KSA' (optional)
+
+    Returns:
+        DataFrame with qualification tracking data including:
+        - Event_Type, Actual_Event_Name
+        - Federation, Athlete
+        - Qualification_Status, Status, Details
+    """
+    # Try direct Azure download first
+    if get_data_mode() == "azure":
+        df = _download_parquet_from_azure("road_to_tokyo.parquet")
+        if df is not None:
+            if federation:
+                df = df[df['Federation'].str.upper().str.contains(federation.upper(), na=False)]
+            return df
+
+    # Fall back to local parquet or DuckDB
+    base_path = get_base_path()
+    parquet_path = f"{base_path}/road_to_tokyo.parquet"
+    try:
+        con = get_connection()
+        sql = f"SELECT * FROM '{parquet_path}'"
+        if federation:
+            sql += f" WHERE Federation ILIKE '%{federation}%'"
+        return con.execute(sql).fetchdf()
+    except Exception:
+        return pd.DataFrame()
+
+
 def test_connection() -> dict:
     """Test database connectivity and return diagnostic info."""
     result = {
