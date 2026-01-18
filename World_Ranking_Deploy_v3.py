@@ -13,6 +13,13 @@ import re
 from athletics_analytics_agents import AthleticsAnalytics, DISCIPLINE_KNOWLEDGE, MAJOR_GAMES
 from what_it_takes_to_win import WhatItTakesToWin
 
+# Import Azure/Parquet data connector
+try:
+    from data_connector import get_ksa_athletes, get_data_mode, query as duckdb_query
+    DATA_CONNECTOR_AVAILABLE = True
+except ImportError:
+    DATA_CONNECTOR_AVAILABLE = False
+
 ###################################
 # Team Saudi Brand Colors
 ###################################
@@ -128,7 +135,19 @@ def load_sqlite_table(db_path, table_name):
 
 @st.cache_data
 def load_athlete_profiles():
-    """Load all athlete profile data."""
+    """Load all athlete profile data from Azure Parquet or local SQLite."""
+    # Try Azure/Parquet first (for Streamlit Cloud)
+    if DATA_CONNECTOR_AVAILABLE:
+        try:
+            athletes = get_ksa_athletes()
+            if athletes is not None and not athletes.empty:
+                # Return athletes with empty dataframes for other tables
+                # (rankings, breakdown, pbs, progression not in Parquet yet)
+                return athletes, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        except Exception as e:
+            st.warning(f"Azure data connector error: {e}")
+
+    # Fall back to local SQLite
     if not os.path.exists(DB_PROFILES):
         return None, None, None, None, None
 
