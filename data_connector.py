@@ -33,29 +33,36 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOCAL_PARQUET_DIR = os.path.join(BASE_DIR, "Data", "parquet")
 
 # Connection string cache (lazy-loaded)
+_CONN_STRING_CHECKED = False
 _CONN_STRING = None
 
 
 def _get_connection_string():
     """Get Azure connection string from env or Streamlit secrets (lazy-loaded)."""
-    global _CONN_STRING
+    global _CONN_STRING, _CONN_STRING_CHECKED
 
-    if _CONN_STRING is not None:
+    # Only use cache if we previously found a valid connection string
+    if _CONN_STRING_CHECKED and _CONN_STRING:
         return _CONN_STRING
 
     # Try environment variable first
-    _CONN_STRING = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
+    conn_str = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
 
     # Try Streamlit secrets if not in environment
-    if not _CONN_STRING:
+    if not conn_str:
         try:
             import streamlit as st
             if hasattr(st, 'secrets') and 'AZURE_STORAGE_CONNECTION_STRING' in st.secrets:
-                _CONN_STRING = st.secrets['AZURE_STORAGE_CONNECTION_STRING']
+                conn_str = st.secrets['AZURE_STORAGE_CONNECTION_STRING']
         except (ImportError, FileNotFoundError, KeyError, AttributeError):
             pass
 
-    return _CONN_STRING
+    # Cache only if we found something
+    if conn_str:
+        _CONN_STRING = conn_str
+        _CONN_STRING_CHECKED = True
+
+    return conn_str
 
 
 def get_data_mode() -> str:

@@ -139,6 +139,13 @@ def load_athlete_profiles():
     # Try Azure/Parquet first (for Streamlit Cloud)
     if DATA_CONNECTOR_AVAILABLE:
         try:
+            # Debug: show data mode
+            mode = get_data_mode()
+            if mode == "local":
+                # Check if secrets exist
+                has_secret = 'AZURE_STORAGE_CONNECTION_STRING' in st.secrets if hasattr(st, 'secrets') else False
+                st.info(f"Data mode: {mode} | Secret found: {has_secret}")
+
             athletes = get_ksa_athletes()
             if athletes is not None and not athletes.empty:
                 # Return athletes with empty dataframes for other tables
