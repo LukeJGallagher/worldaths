@@ -833,13 +833,12 @@ with tab5:
         if not ksa_qualified.empty:
             st.success(f"Found {len(ksa_qualified)} KSA athlete entries in qualification data")
 
-            # Rename Status to Athlete for clarity
-            ksa_display = ksa_qualified.copy()
-            ksa_display = ksa_display.rename(columns={'Status': 'Athlete'})
+            # Status column contains the actual athlete names
+            # Create display dataframe with only needed columns
+            ksa_display = ksa_qualified[['Actual_Event_Name', 'Status', 'Qualification_Status', 'Details']].copy()
+            ksa_display.columns = ['Event', 'Athlete', 'Status', 'Details']
 
-            display_cols = ['Actual_Event_Name', 'Athlete', 'Qualification_Status', 'Details']
-            display_cols = [c for c in display_cols if c in ksa_display.columns]
-            st.dataframe(ksa_display[display_cols].drop_duplicates(), use_container_width=True, hide_index=True)
+            st.dataframe(ksa_display.drop_duplicates(), use_container_width=True, hide_index=True)
         else:
             st.info("No KSA athletes found in current qualification data")
 
@@ -882,14 +881,15 @@ with tab5:
             events_count = filtered_rt['Actual_Event_Name'].nunique() if 'Actual_Event_Name' in filtered_rt.columns else 0
             st.metric("Events", events_count)
 
-        # Rename Status to Athlete for display
-        filtered_display = filtered_rt.copy()
-        if 'Status' in filtered_display.columns:
-            filtered_display = filtered_display.rename(columns={'Status': 'Athlete'})
+        # Create display dataframe with only needed columns (Status contains athlete names)
+        display_cols_src = ['Actual_Event_Name', 'Status', 'Qualification_Status', 'Details']
+        display_cols_src = [c for c in display_cols_src if c in filtered_rt.columns]
+        filtered_display = filtered_rt[display_cols_src].copy()
+        # Rename columns for clarity
+        col_rename = {'Actual_Event_Name': 'Event', 'Status': 'Athlete', 'Qualification_Status': 'Status'}
+        filtered_display = filtered_display.rename(columns=col_rename)
 
-        # Show data
-        display_cols = [col for col in ['Actual_Event_Name', 'Athlete', 'Qualification_Status', 'Details'] if col in filtered_display.columns]
-        st.dataframe(filtered_display[display_cols].drop_duplicates().head(500), use_container_width=True, hide_index=True)
+        st.dataframe(filtered_display.drop_duplicates().head(500), use_container_width=True, hide_index=True)
 
     else:
         st.warning("No qualification data found. Data may still be loading from Azure.")
