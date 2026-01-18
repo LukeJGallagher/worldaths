@@ -427,11 +427,89 @@ def get_country_list() -> list:
     return df['nat'].tolist()
 
 
+def get_rankings_data(gender: str = None, country: str = None) -> pd.DataFrame:
+    """
+    Get rankings data from master.parquet.
+
+    This provides similar data to the old SQLite rankings tables.
+    Returns athlete rankings with event, country, result, etc.
+
+    Args:
+        gender: Filter by 'Men' or 'Women' (optional)
+        country: Filter by country code like 'KSA' (optional)
+    """
+    # Try direct Azure download for Streamlit Cloud
+    if get_data_mode() == "azure":
+        df = _download_parquet_from_azure("master.parquet")
+        if df is not None:
+            # Apply filters
+            if gender:
+                gender_code = 'M' if gender == 'Men' else 'F'
+                df = df[(df['gender'] == gender) | (df['gender'] == gender_code)]
+            if country:
+                if 'nat' in df.columns:
+                    df = df[df['nat'].str.upper().str.contains(country.upper(), na=False)]
+                elif 'Country' in df.columns:
+                    df = df[df['Country'].str.upper().str.contains(country.upper(), na=False)]
+            return df
+
+    # Fall back to DuckDB query for local mode
+    sql = "SELECT * FROM master WHERE 1=1"
+
+    if gender:
+        gender_code = 'M' if gender == 'Men' else 'F'
+        sql += f" AND (gender = '{gender}' OR gender = '{gender_code}')"
+
+    if country:
+        sql += f" AND (nat ILIKE '%{country}%' OR Country ILIKE '%{country}%')"
+
+    return query(sql)
+
+
+def get_ksa_rankings() -> pd.DataFrame:
+    """
+    Get KSA athlete rankings from master.parquet.
+
+    Returns filtered view of master data for KSA athletes only,
+    formatted similar to old SQLite rankings tables.
+    """
+    # Try direct Azure download first
+    if get_data_mode() == "azure":
+        df = _download_parquet_from_azure("master.parquet")
+        if df is not None:
+            # Filter for KSA
+            if 'nat' in df.columns:
+                df = df[df['nat'].str.upper().str.contains('KSA', na=False)]
+            elif 'Country' in df.columns:
+                df = df[df['Country'].str.upper().str.contains('KSA', na=False)]
+            return df
+
+    # Fall back to DuckDB for local mode
+    return query("SELECT * FROM master WHERE nat ILIKE '%KSA%' OR Country ILIKE '%KSA%'")
+
+
+def get_benchmarks_data() -> pd.DataFrame:
+    """
+    Get benchmarks/qualification standards from benchmarks.parquet.
+    """
+    # Try direct Azure download first
+    if get_data_mode() == "azure":
+        df = _download_parquet_from_azure("benchmarks.parquet")
+        if df is not None:
+            # Filter out metadata rows
+            if 'source_table' in df.columns:
+                df = df[df['source_table'] != 'metadata']
+            return df
+
+    # Fall back to DuckDB for local mode
+    return query("SELECT * FROM benchmarks WHERE source_table != 'metadata'")
+
+
 def test_connection() -> dict:
     """Test database connectivity and return diagnostic info."""
     result = {
-        "mode": DATA_MODE,
-        "azure_configured": bool(CONN_STRING),
+        "mode": get_data_mode(),
+        "azure_configured": bool(_get_connection_string()),
         "base_path": get_base_path(),
         "connection_test": "not_run",
         "tables": {}

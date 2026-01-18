@@ -15,7 +15,10 @@ from what_it_takes_to_win import WhatItTakesToWin
 
 # Import Azure/Parquet data connector
 try:
-    from data_connector import get_ksa_athletes, get_data_mode, query as duckdb_query
+    from data_connector import (
+        get_ksa_athletes, get_data_mode, query as duckdb_query,
+        get_rankings_data, get_ksa_rankings, get_benchmarks_data
+    )
     DATA_CONNECTOR_AVAILABLE = True
 except ImportError:
     DATA_CONNECTOR_AVAILABLE = False
@@ -352,8 +355,71 @@ if os.path.exists(DB_MEN_RANK):
 ###################################
 # 6) Load Data
 ###################################
-men_rankings = load_sqlite_table(DB_MEN_RANK, 'rankings_men_all_events')
-women_rankings = load_sqlite_table(DB_WOMEN_RANK, 'rankings_women_all_events')
+
+# Try Azure parquet first, fall back to SQLite
+@st.cache_data
+def load_men_rankings():
+    """Load men's rankings from Azure or SQLite."""
+    if DATA_CONNECTOR_AVAILABLE:
+        try:
+            df = get_rankings_data(gender='Men')
+            if df is not None and not df.empty:
+                # Rename columns to match expected format
+                col_map = {
+                    'event': 'Event Type',
+                    'rank': 'Rank',
+                    'competitor': 'Name',
+                    'nat': 'Country',
+                    'result': 'Score'
+                }
+                df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+                return df
+        except Exception as e:
+            st.warning(f"Azure rankings error: {e}")
+    return load_sqlite_table(DB_MEN_RANK, 'rankings_men_all_events')
+
+@st.cache_data
+def load_women_rankings():
+    """Load women's rankings from Azure or SQLite."""
+    if DATA_CONNECTOR_AVAILABLE:
+        try:
+            df = get_rankings_data(gender='Women')
+            if df is not None and not df.empty:
+                col_map = {
+                    'event': 'Event Type',
+                    'rank': 'Rank',
+                    'competitor': 'Name',
+                    'nat': 'Country',
+                    'result': 'Score'
+                }
+                df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+                return df
+        except Exception as e:
+            st.warning(f"Azure rankings error: {e}")
+    return load_sqlite_table(DB_WOMEN_RANK, 'rankings_women_all_events')
+
+@st.cache_data
+def load_ksa_combined_rankings():
+    """Load KSA rankings from Azure or SQLite."""
+    if DATA_CONNECTOR_AVAILABLE:
+        try:
+            df = get_ksa_rankings()
+            if df is not None and not df.empty:
+                col_map = {
+                    'event': 'Event Type',
+                    'rank': 'Rank',
+                    'competitor': 'Name',
+                    'nat': 'Country',
+                    'result': 'Score'
+                }
+                df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+                return df
+        except Exception as e:
+            st.warning(f"Azure KSA rankings error: {e}")
+    return pd.DataFrame()
+
+men_rankings = load_men_rankings()
+women_rankings = load_women_rankings()
 
 try:
     ksa_men_results = load_sqlite_table(DB_KSA_MEN, 'ksa_modal_results_men')
@@ -682,20 +748,33 @@ with tab3:
 with tab4:
     st.header('Saudi Athletes Rankings')
 
+    # Try to get KSA data from existing rankings first
     saudi_men = men_rankings[men_rankings['Country'].str.upper().str.contains('KSA', na=False)] if not men_rankings.empty and 'Country' in men_rankings.columns else pd.DataFrame()
     saudi_women = women_rankings[women_rankings['Country'].str.upper().str.contains('KSA', na=False)] if not women_rankings.empty and 'Country' in women_rankings.columns else pd.DataFrame()
     saudi_combined = pd.concat([saudi_men, saudi_women])
 
+    # If no KSA data from filtered rankings, try direct Azure load
+    if saudi_combined.empty and DATA_CONNECTOR_AVAILABLE:
+        saudi_combined = load_ksa_combined_rankings()
+
     if not saudi_combined.empty:
-        saudi_events = sorted(saudi_combined['Event Type'].dropna().unique())
-        selected_event_saudi = st.selectbox("Select Event", options=["All"] + saudi_events, key="ksa_event_key")
-        if selected_event_saudi != "All":
-            saudi_combined = saudi_combined[saudi_combined['Event Type'] == selected_event_saudi]
+        # Show data mode indicator
+        mode = get_data_mode() if DATA_CONNECTOR_AVAILABLE else 'sqlite'
+        st.success(f"Loaded {len(saudi_combined):,} KSA records from {mode} data source")
+
+        # Get event column name (could be 'Event Type' or 'event')
+        event_col = 'Event Type' if 'Event Type' in saudi_combined.columns else 'event' if 'event' in saudi_combined.columns else None
+
+        if event_col:
+            saudi_events = sorted(saudi_combined[event_col].dropna().unique())
+            selected_event_saudi = st.selectbox("Select Event", options=["All"] + list(saudi_events), key="ksa_event_key")
+            if selected_event_saudi != "All":
+                saudi_combined = saudi_combined[saudi_combined[event_col] == selected_event_saudi]
 
         saudi_combined = saudi_combined.drop_duplicates()
         st.dataframe(saudi_combined.reset_index(drop=True), use_container_width=True)
     else:
-        st.warning("No Saudi athletes found in rankings.")
+        st.warning("No Saudi athletes found in rankings. Data may still be loading from Azure.")
 
 ###################################
 # Tab 5: Road to Tokyo
