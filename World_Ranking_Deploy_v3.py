@@ -546,13 +546,22 @@ with tab1:
             # Show qualification standard if available
             qual_mark = "N/A"
             if not qual_standards_df.empty:
-                event_qual = qual_standards_df[qual_standards_df['Display_Name'].str.contains(selected_event.replace('-', ' '), case=False, na=False)]
-                if not event_qual.empty:
-                    qual_mark = event_qual.iloc[0].get('entry_standard', 'N/A')
+                # Handle both old CSV format (Display_Name) and new parquet format (Event)
+                event_search = selected_event.replace('-', ' ')
+                if 'Display_Name' in qual_standards_df.columns:
+                    event_qual = qual_standards_df[qual_standards_df['Display_Name'].str.contains(event_search, case=False, na=False)]
+                    if not event_qual.empty:
+                        qual_mark = event_qual.iloc[0].get('entry_standard', 'N/A')
+                elif 'Event' in qual_standards_df.columns:
+                    # Use benchmarks parquet format - match event name
+                    event_qual = qual_standards_df[qual_standards_df['Event'].str.contains(event_search, case=False, na=False)]
+                    if not event_qual.empty:
+                        # Get Gold Standard from benchmarks
+                        qual_mark = event_qual.iloc[0].get('Gold Standard', 'N/A')
 
             st.markdown(f"""
             <div class="standard-card">
-                <p style="color: {GOLD_ACCENT}; margin: 0; font-size: 0.85rem;">Tokyo 2025 Standard</p>
+                <p style="color: {GOLD_ACCENT}; margin: 0; font-size: 0.85rem;">Gold Standard</p>
                 <p style="color: white; font-size: 1.2rem; font-weight: bold; margin: 0;">{qual_mark}</p>
             </div>
             """, unsafe_allow_html=True)
