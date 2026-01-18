@@ -2,7 +2,7 @@
 Data Connector - Dual-mode DuckDB wrapper for Azure Blob / Local Parquet files.
 
 Automatically detects AZURE_STORAGE_CONNECTION_STRING to choose mode:
-- Azure mode: Queries Parquet files directly from Azure Blob Storage
+- Azure mode: Downloads Parquet from Azure Blob, queries with DuckDB
 - Local mode: Queries Parquet files from local Data/parquet folder
 
 Usage:
@@ -20,6 +20,7 @@ import duckdb
 import pandas as pd
 from dotenv import load_dotenv
 from functools import lru_cache
+from io import BytesIO
 
 # Load environment variables
 load_dotenv()
@@ -31,6 +32,16 @@ AZURE_FOLDER = "athletics"
 # Local paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOCAL_PARQUET_DIR = os.path.join(BASE_DIR, "Data", "parquet")
+
+# Azure blob client (for direct download)
+try:
+    from azure.storage.blob import BlobServiceClient
+    AZURE_SDK_AVAILABLE = True
+except ImportError:
+    AZURE_SDK_AVAILABLE = False
+
+# Cache for downloaded parquet data
+_PARQUET_CACHE = {}
 
 # Connection string cache (lazy-loaded)
 _CONN_STRING_CHECKED = False
@@ -78,12 +89,42 @@ def get_base_path() -> str:
         return LOCAL_PARQUET_DIR
 
 
+def _download_parquet_from_azure(blob_name: str) -> pd.DataFrame:
+    """Download parquet file from Azure Blob Storage using SDK (avoids DuckDB SSL issues)."""
+    global _PARQUET_CACHE
+
+    # Check cache first
+    if blob_name in _PARQUET_CACHE:
+        return _PARQUET_CACHE[blob_name]
+
+    conn_str = _get_connection_string()
+    if not conn_str or not AZURE_SDK_AVAILABLE:
+        return None
+
+    try:
+        blob_service = BlobServiceClient.from_connection_string(conn_str)
+        container_client = blob_service.get_container_client(CONTAINER_NAME)
+        blob_path = f"{AZURE_FOLDER}/{blob_name}"
+
+        blob_client = container_client.get_blob_client(blob_path)
+        data = blob_client.download_blob().readall()
+
+        df = pd.read_parquet(BytesIO(data))
+        _PARQUET_CACHE[blob_name] = df  # Cache it
+        return df
+    except Exception as e:
+        print(f"Azure download error for {blob_name}: {e}")
+        return None
+
+
 def get_connection():
     """Create DuckDB connection with Azure extension if needed."""
     con = duckdb.connect()
 
+    # Note: DuckDB Azure extension has SSL issues on Streamlit Cloud
+    # Use _download_parquet_from_azure() instead for Azure data
     conn_string = _get_connection_string()
-    if conn_string:
+    if conn_string and os.getenv('USE_DUCKDB_AZURE', 'false').lower() == 'true':
         con.execute("INSTALL azure; LOAD azure;")
         con.execute(f"""
             CREATE SECRET azure_secret (
@@ -132,6 +173,16 @@ def query(sql: str, params: dict = None) -> pd.DataFrame:
 
 def get_ksa_athletes() -> pd.DataFrame:
     """Get all KSA athlete profiles."""
+    # Try direct Azure download first (avoids DuckDB SSL issues on Streamlit Cloud)
+    if get_data_mode() == "azure":
+        df = _download_parquet_from_azure("ksa_profiles.parquet")
+        if df is not None:
+            # Sort by best_world_rank
+            if 'best_world_rank' in df.columns:
+                df = df.sort_values('best_world_rank', na_position='last')
+            return df
+
+    # Fall back to DuckDB query (for local mode)
     return query("SELECT * FROM ksa_profiles ORDER BY best_world_rank ASC NULLS LAST")
 
 
