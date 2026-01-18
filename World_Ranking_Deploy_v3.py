@@ -467,7 +467,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     'Athlete Profiles',
     'Combined Rankings',
     'Saudi Athletes Rankings',
-    'Road to Tokyo',
+    'World Champs Qualification',
     'Major Games Analytics',
     'What It Takes to Win (Live)'
 ])
@@ -798,22 +798,52 @@ with tab4:
         st.warning("No Saudi athletes found in rankings. Data may still be loading from Azure.")
 
 ###################################
-# Tab 5: Road to Tokyo
+# Tab 5: World Championships Qualification
 ###################################
 with tab5:
-    st.header('Road to Tokyo 2025')
+    st.header('World Championships Qualification')
 
     # Show data source indicator
     mode = get_data_mode() if DATA_CONNECTOR_AVAILABLE else 'local'
 
     if not road_to_df.empty:
-        st.success(f"Loaded {len(road_to_df):,} qualification records from {mode} data source")
+        # Get KSA athlete names for matching
+        ksa_names = []
+        if athletes_df is not None and not athletes_df.empty:
+            if 'full_name' in athletes_df.columns:
+                ksa_names = athletes_df['full_name'].tolist()
+
+        # Find KSA athletes in qualification data (Status column contains athlete names)
+        ksa_qualified = pd.DataFrame()
+        if ksa_names and 'Status' in road_to_df.columns:
+            ksa_qualified = road_to_df[road_to_df['Status'].isin(ksa_names)]
+
+        # KSA Athletes Section
+        st.subheader(f"KSA Athletes ({len(ksa_qualified)} entries)")
+
+        if not ksa_qualified.empty:
+            st.success(f"Found {len(ksa_qualified)} KSA athlete entries in qualification data")
+
+            # Rename Status to Athlete for clarity
+            ksa_display = ksa_qualified.copy()
+            ksa_display = ksa_display.rename(columns={'Status': 'Athlete'})
+
+            display_cols = ['Actual_Event_Name', 'Athlete', 'Qualification_Status', 'Details']
+            display_cols = [c for c in display_cols if c in ksa_display.columns]
+            st.dataframe(ksa_display[display_cols].drop_duplicates(), use_container_width=True, hide_index=True)
+        else:
+            st.info("No KSA athletes found in current qualification data")
+
+        # Global Data Section
+        st.markdown("---")
+        st.subheader("All Athletes Qualification Status")
+        st.caption(f"Total: {len(road_to_df):,} records from {mode} data source")
 
         # Filters
         col1, col2 = st.columns(2)
 
         selected_event_rt = "All Events"
-        selected_fed = []
+        selected_status = "All"
 
         with col1:
             if 'Actual_Event_Name' in road_to_df.columns:
@@ -821,23 +851,21 @@ with tab5:
                 selected_event_rt = st.selectbox("Select Event", ["All Events"] + list(events_rt), key="road_to_event")
 
         with col2:
-            if 'Federation' in road_to_df.columns:
-                federations = sorted(road_to_df['Federation'].dropna().unique())
-                # Default to KSA if available
-                default_feds = ['KSA'] if 'KSA' in federations else list(federations[:5])
-                selected_fed = st.multiselect("Select Federations", federations, default=default_feds)
+            if 'Qualification_Status' in road_to_df.columns:
+                statuses = sorted(road_to_df['Qualification_Status'].dropna().unique())
+                selected_status = st.selectbox("Qualification Status", ["All"] + list(statuses), key="qual_status")
 
         # Filter data
         filtered_rt = road_to_df.copy()
         if selected_event_rt != "All Events":
             filtered_rt = filtered_rt[filtered_rt['Actual_Event_Name'] == selected_event_rt]
-        if selected_fed:
-            filtered_rt = filtered_rt[filtered_rt['Federation'].isin(selected_fed)]
+        if selected_status != "All":
+            filtered_rt = filtered_rt[filtered_rt['Qualification_Status'] == selected_status]
 
         # Metrics
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("Total Athletes", len(filtered_rt))
+            st.metric("Total Entries", len(filtered_rt))
         with col2:
             qualified = len(filtered_rt[filtered_rt['Qualification_Status'].str.contains('Qualified', na=False)]) if 'Qualification_Status' in filtered_rt.columns else 0
             st.metric("Qualified", qualified)
@@ -845,12 +873,17 @@ with tab5:
             events_count = filtered_rt['Actual_Event_Name'].nunique() if 'Actual_Event_Name' in filtered_rt.columns else 0
             st.metric("Events", events_count)
 
+        # Rename Status to Athlete for display
+        filtered_display = filtered_rt.copy()
+        if 'Status' in filtered_display.columns:
+            filtered_display = filtered_display.rename(columns={'Status': 'Athlete'})
+
         # Show data
-        display_cols = [col for col in ['Actual_Event_Name', 'Federation', 'Athlete', 'Qualification_Status', 'Status', 'Details'] if col in filtered_rt.columns]
-        st.dataframe(filtered_rt[display_cols].drop_duplicates(), use_container_width=True)
+        display_cols = [col for col in ['Actual_Event_Name', 'Athlete', 'Qualification_Status', 'Details'] if col in filtered_display.columns]
+        st.dataframe(filtered_display[display_cols].drop_duplicates().head(500), use_container_width=True, hide_index=True)
 
     else:
-        st.warning("No Road to Tokyo data found. Data may still be loading from Azure.")
+        st.warning("No qualification data found. Data may still be loading from Azure.")
 
     # Show qualification standards (from benchmarks parquet)
     if not qual_standards_df.empty:
