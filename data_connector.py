@@ -24,8 +24,7 @@ from functools import lru_cache
 # Load environment variables
 load_dotenv()
 
-# Configuration
-CONN_STRING = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
+# Configuration - lazy loaded
 CONTAINER_NAME = "personal-data"
 AZURE_FOLDER = "athletics"
 
@@ -33,18 +32,40 @@ AZURE_FOLDER = "athletics"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOCAL_PARQUET_DIR = os.path.join(BASE_DIR, "Data", "parquet")
 
-# Data mode
-DATA_MODE = "azure" if CONN_STRING else "local"
+# Connection string cache (lazy-loaded)
+_CONN_STRING = None
+
+
+def _get_connection_string():
+    """Get Azure connection string from env or Streamlit secrets (lazy-loaded)."""
+    global _CONN_STRING
+
+    if _CONN_STRING is not None:
+        return _CONN_STRING
+
+    # Try environment variable first
+    _CONN_STRING = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
+
+    # Try Streamlit secrets if not in environment
+    if not _CONN_STRING:
+        try:
+            import streamlit as st
+            if hasattr(st, 'secrets') and 'AZURE_STORAGE_CONNECTION_STRING' in st.secrets:
+                _CONN_STRING = st.secrets['AZURE_STORAGE_CONNECTION_STRING']
+        except (ImportError, FileNotFoundError, KeyError, AttributeError):
+            pass
+
+    return _CONN_STRING
 
 
 def get_data_mode() -> str:
     """Return current data mode: 'azure' or 'local'."""
-    return DATA_MODE
+    return "azure" if _get_connection_string() else "local"
 
 
 def get_base_path() -> str:
     """Get base path for Parquet files based on data mode."""
-    if DATA_MODE == "azure":
+    if get_data_mode() == "azure":
         return f"az://{CONTAINER_NAME}/{AZURE_FOLDER}"
     else:
         return LOCAL_PARQUET_DIR
@@ -54,12 +75,13 @@ def get_connection():
     """Create DuckDB connection with Azure extension if needed."""
     con = duckdb.connect()
 
-    if DATA_MODE == "azure":
+    conn_string = _get_connection_string()
+    if conn_string:
         con.execute("INSTALL azure; LOAD azure;")
         con.execute(f"""
             CREATE SECRET azure_secret (
                 TYPE AZURE,
-                CONNECTION_STRING '{CONN_STRING}'
+                CONNECTION_STRING '{conn_string}'
             );
         """)
 
