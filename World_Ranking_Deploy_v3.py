@@ -698,7 +698,77 @@ with tab2:
                     </div>
                     """, unsafe_allow_html=True)
 
-                # Rankings and PBs
+                # Show key metrics from profile
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    best_rank = athlete.get('best_world_rank', None)
+                    st.markdown(f"""
+                    <div class="metric-card">
+                        <p style="color: {GOLD_ACCENT}; font-size: 0.9rem; margin: 0;">Best World Rank</p>
+                        <p style="color: white; font-size: 2rem; font-weight: bold; margin: 0.25rem 0;">
+                            #{int(best_rank) if pd.notna(best_rank) else 'N/A'}
+                        </p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with col2:
+                    best_score = athlete.get('best_score', None)
+                    st.markdown(f"""
+                    <div class="metric-card">
+                        <p style="color: {TEAL_LIGHT}; font-size: 0.9rem; margin: 0;">Best Score</p>
+                        <p style="color: white; font-size: 2rem; font-weight: bold; margin: 0.25rem 0;">
+                            {int(best_score) if pd.notna(best_score) else 'N/A'}
+                        </p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with col3:
+                    st.markdown(f"""
+                    <div class="metric-card">
+                        <p style="color: #aaa; font-size: 0.9rem; margin: 0;">Primary Event</p>
+                        <p style="color: white; font-size: 1.5rem; font-weight: bold; margin: 0.25rem 0;">
+                            {athlete.get('primary_event', 'N/A')}
+                        </p>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                # Get athlete results from master parquet (Azure)
+                if DATA_CONNECTOR_AVAILABLE:
+                    athlete_name = athlete['full_name']
+                    try:
+                        # Get all results for this athlete from master data
+                        ksa_data = get_ksa_rankings()
+                        if ksa_data is not None and not ksa_data.empty:
+                            # Match by full name (case-insensitive)
+                            athlete_results = ksa_data[ksa_data['competitor'].str.upper() == athlete_name.upper()]
+                            # If no exact match, try partial match on last name
+                            if athlete_results.empty:
+                                last_name = athlete_name.upper().split()[-1]
+                                athlete_results = ksa_data[ksa_data['competitor'].str.upper().str.contains(last_name, na=False)]
+
+                            if not athlete_results.empty:
+                                st.subheader("Competition Results")
+
+                                # Show best results per event
+                                if 'event' in athlete_results.columns and 'result' in athlete_results.columns:
+                                    # Group by event and get best result
+                                    display_cols = ['event', 'result', 'date', 'venue', 'rank']
+                                    display_cols = [c for c in display_cols if c in athlete_results.columns]
+                                    results_display = athlete_results[display_cols].copy()
+                                    results_display.columns = [c.title() for c in results_display.columns]
+
+                                    # Sort by date descending
+                                    if 'Date' in results_display.columns:
+                                        results_display = results_display.sort_values('Date', ascending=False)
+
+                                    st.dataframe(results_display.head(20), use_container_width=True, hide_index=True)
+
+                                    # Show events competed in
+                                    if 'Event' in results_display.columns:
+                                        events = results_display['Event'].unique()
+                                        st.caption(f"Events: {', '.join(events)}")
+                    except Exception as e:
+                        st.caption(f"Could not load results: {e}")
+
+                # Rankings and PBs from SQLite (legacy support)
                 if rankings_df is not None and not rankings_df.empty:
                     athlete_rankings = rankings_df[rankings_df['athlete_id'] == athlete_id]
                     if not athlete_rankings.empty:
