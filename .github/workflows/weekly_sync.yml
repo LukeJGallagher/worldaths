@@ -1,0 +1,110 @@
+name: Weekly Data Sync
+
+on:
+  schedule:
+    # Run every Sunday at 2 AM UTC
+    - cron: '0 2 * * 0'
+  workflow_dispatch:
+    inputs:
+      full_refresh:
+        description: 'Run full data refresh'
+        required: false
+        default: 'false'
+        type: boolean
+
+jobs:
+  sync-data:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Validate existing data
+        env:
+          AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+        run: |
+          echo "Validating current Azure data..."
+          python backup_manager.py validate || echo "No existing data to validate"
+
+      - name: Create backup before sync
+        env:
+          AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+        run: |
+          echo "Creating backup..."
+          python -c "
+          from backup_manager import create_backup, get_blob_service, CONTAINER_NAME
+          blob_service = get_blob_service()
+          container = blob_service.get_container_client(CONTAINER_NAME)
+          for filename in ['master.parquet', 'ksa_profiles.parquet', 'benchmarks.parquet']:
+              try:
+                  from backup_manager import create_backup
+                  # Create timestamped backup
+                  from datetime import datetime
+                  timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                  source = container.get_blob_client(f'athletics/{filename}')
+                  if source.exists():
+                      backup = container.get_blob_client(f'athletics/backups/{filename}_{timestamp}')
+                      backup.start_copy_from_url(source.url)
+                      print(f'Backed up: {filename}')
+              except Exception as e:
+                  print(f'Backup skipped for {filename}: {e}')
+          "
+
+      - name: Run data conversion and upload
+        env:
+          AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+        run: |
+          echo "Converting and uploading data..."
+          python convert_to_parquet.py
+
+      - name: Verify uploaded data
+        env:
+          AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+        run: |
+          echo "Verifying Azure data..."
+          python backup_manager.py list
+
+      - name: Cleanup old backups
+        env:
+          AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+        run: |
+          echo "Cleaning up old backups (keeping 7 daily, 4 weekly)..."
+          python -c "
+          from backup_manager import get_blob_service, CONTAINER_NAME, cleanup_old_backups
+          blob_service = get_blob_service()
+          container = blob_service.get_container_client(CONTAINER_NAME)
+          cleanup_old_backups(container)
+          "
+
+      - name: Report status
+        if: always()
+        env:
+          AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+        run: |
+          echo "=== SYNC COMPLETE ==="
+          python -c "
+          from backup_manager import get_blob_service, CONTAINER_NAME
+          blob_service = get_blob_service()
+          container = blob_service.get_container_client(CONTAINER_NAME)
+          total = 0
+          print('Current files:')
+          for blob in container.list_blobs(name_starts_with='athletics/'):
+              if not '/backups/' in blob.name and not '/baseline/' in blob.name:
+                  size_mb = blob.size / (1024*1024)
+                  total += blob.size
+                  print(f'  {blob.name}: {size_mb:.2f} MB')
+          print(f'Total: {total/(1024*1024):.2f} MB')
+          "

@@ -1,0 +1,29 @@
+# Core
+streamlit>=1.30.0
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Azure Storage
+azure-storage-blob>=12.19.0
+azure-identity>=1.15.0
+
+# Data Processing
+pyarrow>=14.0.0
+duckdb>=0.10.0
+
+# Database
+pyodbc>=5.0.0
+sqlalchemy>=2.0.0
+
+# Web Scraping (for local scrapers)
+selenium>=4.15.0
+webdriver-manager>=4.0.0
+
+# Visualization
+plotly>=5.18.0
+
+# Environment
+python-dotenv>=1.0.0
+
+# HTTP
+requests>=2.31.0

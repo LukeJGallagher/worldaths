@@ -1,0 +1,93 @@
+name: Restore from Backup
+
+on:
+  workflow_dispatch:
+    inputs:
+      restore_type:
+        description: 'Restore type'
+        required: true
+        type: choice
+        options:
+          - baseline
+          - latest_backup
+      confirm:
+        description: 'Type "RESTORE" to confirm'
+        required: true
+        type: string
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.confirm == 'RESTORE'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: List available backups
+        env:
+          AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+        run: |
+          echo "Available backups:"
+          python backup_manager.py list
+
+      - name: Restore from baseline
+        if: github.event.inputs.restore_type == 'baseline'
+        env:
+          AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+        run: |
+          echo "Restoring from baseline..."
+          python backup_manager.py restore --baseline
+
+      - name: Restore from latest backup
+        if: github.event.inputs.restore_type == 'latest_backup'
+        env:
+          AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+        run: |
+          echo "Restoring from latest backup..."
+          python -c "
+          from backup_manager import get_blob_service, CONTAINER_NAME, AZURE_FOLDER
+          from collections import defaultdict
+
+          blob_service = get_blob_service()
+          container = blob_service.get_container_client(CONTAINER_NAME)
+
+          # Find latest backup for each file
+          backups = defaultdict(list)
+          for blob in container.list_blobs(name_starts_with='athletics/backups/'):
+              if '.parquet' in blob.name:
+                  parts = blob.name.split('/')[-1].rsplit('_', 2)
+                  if len(parts) >= 3:
+                      base_name = parts[0]
+                      backups[base_name].append(blob.name)
+
+          # Restore latest for each
+          for base_name, backup_list in backups.items():
+              if backup_list:
+                  latest = sorted(backup_list)[-1]
+                  dest = f'{AZURE_FOLDER}/{base_name}.parquet'
+
+                  source_blob = container.get_blob_client(latest)
+                  dest_blob = container.get_blob_client(dest)
+                  dest_blob.start_copy_from_url(source_blob.url)
+
+                  print(f'Restored: {base_name}.parquet from {latest.split(\"/\")[-1]}')
+          "
+
+      - name: Verify restore
+        env:
+          AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+        run: |
+          echo "Verifying restored data..."
+          python backup_manager.py list

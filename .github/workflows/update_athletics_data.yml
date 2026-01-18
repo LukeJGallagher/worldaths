@@ -1,0 +1,215 @@
+name: Update Athletics Data
+
+on:
+  schedule:
+    # Run weekly on Sunday at 2 AM UTC
+    - cron: '0 2 * * 0'
+  workflow_dispatch:
+    inputs:
+      years:
+        description: 'Years to scrape (comma-separated, e.g., 2024,2025)'
+        required: false
+        default: '2024,2025'
+      events:
+        description: 'Specific events to scrape (leave empty for all)'
+        required: false
+        default: ''
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  scrape-and-update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas requests beautifulsoup4 lxml brotli zstandard tqdm
+
+      - name: Configure scraper for requested years
+        run: |
+          cd world_athletics_scraperv2
+
+          # Update config.py with requested years
+          YEARS="${{ github.event.inputs.years || '2024,2025' }}"
+          python -c "
+          import re
+          with open('config.py', 'r') as f:
+              content = f.read()
+
+          years_list = '[' + ', '.join('$YEARS'.split(',')) + ']'
+          content = re.sub(
+              r'DEFAULT_YEARS = \[.*?\]',
+              f'DEFAULT_YEARS = {years_list}',
+              content
+          )
+
+          with open('config.py', 'w') as f:
+              f.write(content)
+
+          print(f'Updated DEFAULT_YEARS to {years_list}')
+          "
+
+      - name: Run World Athletics Scraper
+        run: |
+          cd world_athletics_scraperv2
+          python main.py
+        timeout-minutes: 120
+
+      - name: Run What It Takes to Win Analysis
+        run: |
+          python what_it_takes_to_win.py
+
+      - name: Update KSA Athlete Profiles from Scraped Data
+        run: |
+          python update_ksa_profiles_from_scraped.py
+
+      - name: Try GraphQL Profile Enrichment (optional)
+        run: |
+          # This may fail if GraphQL API is blocked, that's OK
+          pip install httpx || true
+          python scrape_ksa_profiles_graphql.py || echo "GraphQL enrichment skipped (API may be unavailable)"
+        continue-on-error: true
+
+      - name: Profile Summary
+        run: |
+          python -c "
+          import sqlite3
+          import os
+
+          db_path = 'SQL/ksa_athlete_profiles.db'
+          if os.path.exists(db_path):
+              conn = sqlite3.connect(db_path)
+              cursor = conn.cursor()
+
+              cursor.execute('SELECT COUNT(*) FROM ksa_athletes')
+              total = cursor.fetchone()[0]
+
+              cursor.execute('SELECT COUNT(*) FROM athlete_pbs')
+              pbs = cursor.fetchone()[0]
+
+              cursor.execute('SELECT COUNT(*) FROM athlete_rankings')
+              rankings = cursor.fetchone()[0]
+
+              print(f'Athletes: {total}')
+              print(f'Personal Bests: {pbs}')
+              print(f'Event Rankings: {rankings}')
+
+              # Top 5
+              cursor.execute('''
+                  SELECT full_name, primary_event, best_score, best_world_rank
+                  FROM ksa_athletes
+                  WHERE best_score IS NOT NULL
+                  ORDER BY best_score DESC
+                  LIMIT 5
+              ''')
+              print('\\nTop 5 KSA Athletes:')
+              for row in cursor.fetchall():
+                  rank = f'#{row[3]}' if row[3] else '-'
+                  print(f'  {row[0]} | {row[1]} | {row[2]:.0f} pts | World {rank}')
+
+              conn.close()
+          "
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: athletics-data-${{ github.run_number }}
+          path: |
+            world_athletics_scraperv2/data/*.csv
+            SQL/what_it_takes_to_win.db
+            SQL/ksa_athlete_profiles.db
+            SQL/KSA_complete_profiles.csv
+          retention-days: 30
+
+      - name: Commit and push updated data
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+
+          # Add data files
+          git add world_athletics_scraperv2/data/*.csv || true
+          git add SQL/what_it_takes_to_win.db || true
+          git add SQL/ksa_athlete_profiles.db || true
+          git add SQL/KSA_complete_profiles.csv || true
+
+          # Check if there are changes to commit
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Auto-update: Athletics data + KSA profiles $(date +'%Y-%m-%d')"
+            git push
+          fi
+
+      - name: Summary
+        run: |
+          echo "## Athletics Data Update Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Run Date:** $(date +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ -f world_athletics_scraperv2/data/db_cleaned.csv ]; then
+            RECORDS=$(wc -l < world_athletics_scraperv2/data/db_cleaned.csv)
+            echo "**Records Scraped:** $RECORDS" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Years Covered:** ${{ github.event.inputs.years || '2024,2025' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### KSA Athlete Profiles" >> $GITHUB_STEP_SUMMARY
+          python -c "
+          import sqlite3
+          import os
+
+          db_path = 'SQL/ksa_athlete_profiles.db'
+          if os.path.exists(db_path):
+              conn = sqlite3.connect(db_path)
+              cursor = conn.cursor()
+
+              cursor.execute('SELECT COUNT(*) FROM ksa_athletes')
+              total = cursor.fetchone()[0]
+
+              cursor.execute('SELECT COUNT(*) FROM athlete_pbs')
+              pbs = cursor.fetchone()[0]
+
+              print(f'| Metric | Count |')
+              print(f'|--------|-------|')
+              print(f'| Athletes | {total} |')
+              print(f'| Personal Bests | {pbs} |')
+
+              conn.close()
+          " >> $GITHUB_STEP_SUMMARY
+
+  notify-on-failure:
+    runs-on: ubuntu-latest
+    needs: scrape-and-update
+    if: failure()
+
+    steps:
+      - name: Create failure issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Athletics Data Update Failed - ${new Date().toISOString().split('T')[0]}`,
+              body: `The automated athletics data update workflow failed.\n\nWorkflow run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}\n\nPlease check the logs for more details.`,
+              labels: ['bug', 'automated']
+            })

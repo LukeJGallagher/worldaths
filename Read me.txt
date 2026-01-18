@@ -1,0 +1,7 @@
+Read me
+Create csv database for all athletes using World Rankings_All.py
+Create csv database for all athletes using World Rankings_KSA_Ave_both.py
+            *** Check they saved as correct name in Data/****eg men or women and in correct folder
+Use SQL Converter2.py to reduce file size and checke in SQL folder 
+All edits in World_Ranking_Dash.py
+Then copy to World_Ranking_Deploy.py and put in Github folder to World_Ranking_Deploy         
