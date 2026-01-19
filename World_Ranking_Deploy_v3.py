@@ -199,8 +199,14 @@ class OpenRouterClient:
             api_key=api_key
         )
         self.model = model
-        # Use singleton context builder - avoids reloading data on each message
-        self.context_builder = get_context_builder()
+        # Use singleton context builder if available, otherwise use local lightweight version
+        if CHATBOT_CONTEXT_AVAILABLE and get_context_builder is not None:
+            try:
+                self.context_builder = get_context_builder()
+            except Exception:
+                self.context_builder = AthleticsContextBuilder()
+        else:
+            self.context_builder = AthleticsContextBuilder()
 
     def chat(self, messages: list, user_query: str = None) -> dict:
         """Send chat completion request."""
@@ -2004,25 +2010,31 @@ with tab8:
             })
 
             # Create client and get response
-            with st.spinner("Analyzing..."):
-                client = OpenRouterClient(api_key, st.session_state.chatbot_model)
+            try:
+                with st.spinner("Analyzing..."):
+                    client = OpenRouterClient(api_key, st.session_state.chatbot_model)
 
-                # Prepare messages for API (without context field)
-                api_messages = [{"role": m["role"], "content": m["content"]}
-                               for m in st.session_state.chatbot_messages]
+                    # Prepare messages for API (without context field)
+                    api_messages = [{"role": m["role"], "content": m["content"]}
+                                   for m in st.session_state.chatbot_messages]
 
-                # Use enhanced query for context building
-                response = client.chat(api_messages, user_query=enhanced_query)
+                    # Use enhanced query for context building
+                    response = client.chat(api_messages, user_query=enhanced_query)
 
-            # Add assistant response
-            st.session_state.chatbot_messages.append({
-                "role": "assistant",
-                "content": response["content"],
-                "context": response.get("context_used", "")
-            })
+                # Add assistant response
+                st.session_state.chatbot_messages.append({
+                    "role": "assistant",
+                    "content": response["content"],
+                    "context": response.get("context_used", "")
+                })
 
-            # Clear input and rerun to show new messages
-            st.rerun()
+                # Clear input and rerun to show new messages
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error processing request: {str(e)}")
+                # Remove the user message if we failed
+                if st.session_state.chatbot_messages and st.session_state.chatbot_messages[-1]["role"] == "user":
+                    st.session_state.chatbot_messages.pop()
 
         # Example questions
         st.markdown("<br>", unsafe_allow_html=True)
@@ -2043,18 +2055,23 @@ with tab8:
                         "content": question
                     })
                     # Trigger processing
-                    with st.spinner("Analyzing..."):
-                        client = OpenRouterClient(api_key, st.session_state.chatbot_model)
-                        api_messages = [{"role": m["role"], "content": m["content"]}
-                                       for m in st.session_state.chatbot_messages]
-                        response = client.chat(api_messages, user_query=question)
+                    try:
+                        with st.spinner("Analyzing..."):
+                            client = OpenRouterClient(api_key, st.session_state.chatbot_model)
+                            api_messages = [{"role": m["role"], "content": m["content"]}
+                                           for m in st.session_state.chatbot_messages]
+                            response = client.chat(api_messages, user_query=question)
 
-                    st.session_state.chatbot_messages.append({
-                        "role": "assistant",
-                        "content": response["content"],
-                        "context": response.get("context_used", "")
-                    })
-                    st.rerun()
+                        st.session_state.chatbot_messages.append({
+                            "role": "assistant",
+                            "content": response["content"],
+                            "context": response.get("context_used", "")
+                        })
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {str(e)}")
+                        if st.session_state.chatbot_messages and st.session_state.chatbot_messages[-1]["role"] == "user":
+                            st.session_state.chatbot_messages.pop()
 
 ###################################
 # Tab 9: Coach View
