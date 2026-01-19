@@ -606,17 +606,14 @@ def get_logo_base64():
     return None
 
 logo_b64 = get_logo_base64()
-logo_html = f'<img src="data:image/png;base64,{logo_b64}" style="height: 60px; margin-right: 1rem;">' if logo_b64 else ''
 
-st.markdown(f"""
-<div style="background: linear-gradient(135deg, {TEAL_PRIMARY} 0%, {TEAL_DARK} 100%); padding: 1.5rem; border-radius: 12px; margin-bottom: 1.5rem; display: flex; align-items: center;">
-    {logo_html}
-    <div>
-        <h1 style="color: white !important; margin: 0; font-size: 2rem;">Saudi Athletics Dashboard</h1>
-        <p style="color: rgba(255,255,255,0.9); margin: 0.5rem 0 0 0;">World Rankings, Performance Analysis & Road to Tokyo 2025</p>
-    </div>
-</div>
-""", unsafe_allow_html=True)
+# Build header HTML - logo is optional
+if logo_b64:
+    header_html = f'''<div style="background: linear-gradient(135deg, {TEAL_PRIMARY} 0%, {TEAL_DARK} 100%); padding: 1.5rem; border-radius: 12px; margin-bottom: 1.5rem; display: flex; align-items: center;"><img src="data:image/png;base64,{logo_b64}" style="height: 60px; margin-right: 1rem;"><div><h1 style="color: white; margin: 0; font-size: 2rem;">Saudi Athletics Dashboard</h1><p style="color: rgba(255,255,255,0.9); margin: 0.5rem 0 0 0;">World Rankings, Performance Analysis &amp; Road to Tokyo 2025</p></div></div>'''
+else:
+    header_html = f'''<div style="background: linear-gradient(135deg, {TEAL_PRIMARY} 0%, {TEAL_DARK} 100%); padding: 1.5rem; border-radius: 12px; margin-bottom: 1.5rem;"><h1 style="color: white; margin: 0; font-size: 2rem;">Saudi Athletics Dashboard</h1><p style="color: rgba(255,255,255,0.9); margin: 0.5rem 0 0 0;">World Rankings, Performance Analysis &amp; Road to Tokyo 2025</p></div>'''
+
+st.markdown(header_html, unsafe_allow_html=True)
 
 # Database last updated info
 if os.path.exists(DB_MEN_RANK):
