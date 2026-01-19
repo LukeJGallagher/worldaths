@@ -848,21 +848,45 @@ class MajorGamesAnalyzer(BaseAthleticsAgent):
         if df.empty:
             return {'error': 'No data available'}
 
-        # Filter for finals (round = 'F') at major games
+        # Filter for finals at major games
         major_game_types = list(self.major_games.keys())
-        finals_data = df[(df['round'] == 'F') & (df['game_category'].isin(major_game_types))]
+
+        # Check if round column exists
+        if 'round' in df.columns:
+            finals_data = df[(df['round'] == 'F') & (df['game_category'].isin(major_game_types))]
+        else:
+            # No round column - use top 8 placements as proxy for finals
+            df_major = df[df['game_category'].isin(major_game_types)]
+            if 'place' in df_major.columns:
+                finals_data = df_major[df_major['place'].fillna(999).astype(float) <= 8]
+            else:
+                # Just return major games data
+                finals_data = df_major
 
         if finals_data.empty:
             return {'message': 'No finals appearances at major games'}
 
+        # Ensure full_name column exists
+        if 'full_name' not in finals_data.columns:
+            return {'message': 'No athlete name data available'}
+
+        # Build result with available columns
+        agg_cols = {}
+        if 'game_category' in finals_data.columns:
+            agg_cols['game_category'] = list
+        if 'event_name' in finals_data.columns:
+            agg_cols['event_name'] = list
+        if 'result_value' in finals_data.columns:
+            agg_cols['result_value'] = list
+        if 'place' in finals_data.columns:
+            agg_cols['place'] = list
+
+        if not agg_cols:
+            return {'message': 'Insufficient data for finals analysis'}
+
         return {
             'total_finals': len(finals_data),
-            'by_athlete': finals_data.groupby('full_name').agg({
-                'game_category': list,
-                'event_name': list,
-                'result_value': list,
-                'place': list
-            }).to_dict('index')
+            'by_athlete': finals_data.groupby('full_name').agg(agg_cols).to_dict('index')
         }
 
 
