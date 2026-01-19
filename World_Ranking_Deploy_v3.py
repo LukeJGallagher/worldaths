@@ -8,10 +8,26 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import re
+from openai import OpenAI
 
 # Import athletics analytics
 from athletics_analytics_agents import AthleticsAnalytics, DISCIPLINE_KNOWLEDGE, MAJOR_GAMES
 from what_it_takes_to_win import WhatItTakesToWin
+
+# Import chatbot context builder (singleton)
+try:
+    from athletics_chatbot import get_context_builder
+    CHATBOT_CONTEXT_AVAILABLE = True
+except ImportError:
+    CHATBOT_CONTEXT_AVAILABLE = False
+    get_context_builder = None
+
+# Import Coach View module
+try:
+    from coach_view import render_coach_view
+    COACH_VIEW_AVAILABLE = True
+except ImportError:
+    COACH_VIEW_AVAILABLE = False
 
 # Import Azure/Parquet data connector
 try:
@@ -32,6 +48,200 @@ GOLD_ACCENT = '#a08e66'
 TEAL_DARK = '#005a51'
 TEAL_LIGHT = '#009688'
 GRAY_BLUE = '#78909C'
+
+###################################
+# AI Chatbot Configuration
+###################################
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+FREE_MODELS = {
+    'google/gemma-3-27b-it:free': 'Gemma 3 27B (Recommended)',
+    'google/gemini-2.0-flash-exp:free': 'Gemini 2.0 Flash (Google)',
+    'meta-llama/llama-3.3-70b-instruct:free': 'Llama 3.3 70B (Best)',
+    'meta-llama/llama-3.2-3b-instruct:free': 'Llama 3.2 3B (Fast)',
+    'qwen/qwen2.5-vl-7b-instruct:free': 'Qwen 2.5 VL 7B (Multilingual)',
+    'nousresearch/hermes-3-llama-3.1-405b:free': 'Hermes 3 405B (Advanced)',
+}
+DEFAULT_MODEL = 'google/gemma-3-27b-it:free'
+
+ATHLETICS_KNOWLEDGE = """
+You are an elite sports analyst specializing in athletics (track and field) for Team Saudi.
+
+Your expertise includes:
+- Sprint events (100m, 200m, 400m) - Reaction times, phase analysis, speed endurance
+- Distance events (800m-Marathon) - Pacing, lactate threshold, race tactics
+- Field events (Jumps, Throws) - Technical phases, approach velocities, release angles
+- Combined events (Decathlon, Heptathlon) - Point scoring, event priorities
+
+Key performance contexts:
+- World Athletics rankings and scoring system
+- Olympic and World Championship qualification standards
+- Asian Games and regional competition levels
+- Personal best (PB) vs season best (SB) analysis
+- Age-grade performance comparisons
+
+When analyzing data, always consider:
+1. Event-specific performance metrics
+2. Competition level and conditions
+3. Historical trends and progression
+4. Comparison to qualification standards
+5. Strategic recommendations for improvement
+
+Respond in a professional yet accessible manner, suitable for coaches and athletes.
+Use metric units. Reference specific data when available.
+"""
+
+def get_openrouter_key():
+    """Get OpenRouter API key from environment or Streamlit secrets."""
+    api_key = os.getenv('OPENROUTER_API_KEY')
+    if not api_key:
+        try:
+            if hasattr(st, 'secrets') and 'OPENROUTER_API_KEY' in st.secrets:
+                api_key = st.secrets['OPENROUTER_API_KEY']
+        except (FileNotFoundError, KeyError):
+            pass
+    return api_key
+
+
+class AthleticsContextBuilder:
+    """Builds lightweight context for RAG without heavy data loading."""
+
+    # Pre-computed static context about the database
+    STATIC_CONTEXT = """
+DATABASE SUMMARY:
+- Master rankings: 2.3M+ performance records from World Athletics
+- KSA athlete profiles: 152 Saudi athletes with PBs and rankings
+- Benchmarks: Medal standards for Olympics, World Champs, Asian Games, Arab Champs
+- Events covered: All track & field events (sprints, distance, jumps, throws, combined)
+- Years: 2015-2025
+
+KEY SAUDI EVENTS (by athlete count):
+- 100m, 200m, 400m (sprints)
+- Long Jump, Triple Jump, High Jump
+- Shot Put, Discus, Javelin
+- 800m, 1500m (middle distance)
+
+QUALIFICATION STANDARDS (2024 World Champs examples):
+- Men's 100m: 10.00s (entry), sub-10.00 for finals
+- Men's 400m: 44.50s (entry)
+- Men's Long Jump: 8.15m (entry)
+- Women's 100m: 11.07s (entry)
+
+The dashboard contains detailed athlete profiles, head-to-head comparisons,
+gap analysis to qualification standards, and historical performance trends.
+"""
+
+    def __init__(self):
+        self.data_available = DATA_CONNECTOR_AVAILABLE
+        self._ksa_cache = None
+
+    def get_ksa_summary(self) -> str:
+        """Get cached summary of KSA athletes (lightweight)."""
+        if self._ksa_cache:
+            return self._ksa_cache
+
+        if not self.data_available:
+            return "KSA athlete data available in dashboard tabs."
+
+        try:
+            # Use cached function from Streamlit
+            df = get_ksa_athletes()
+            if df is None or df.empty:
+                return "KSA athlete profiles available in Athlete Profiles tab."
+
+            summary_parts = [f"KSA Athletes: {len(df)} profiles in database"]
+
+            if 'discipline' in df.columns:
+                events = df['discipline'].value_counts().head(5)
+                summary_parts.append(f"Top events: {', '.join([f'{e} ({c})' for e, c in events.items()])}")
+
+            self._ksa_cache = "\n".join(summary_parts)
+            return self._ksa_cache
+        except Exception:
+            return "KSA athlete data available in dashboard tabs."
+
+    def build_context(self, query: str) -> str:
+        """Build lightweight context without loading large datasets."""
+        context_parts = [self.STATIC_CONTEXT]
+
+        query_lower = query.lower()
+
+        # Add KSA-specific context only for KSA queries
+        if any(term in query_lower for term in ['ksa', 'saudi', 'our', 'team']):
+            context_parts.append(self.get_ksa_summary())
+
+        # Add event-specific hints
+        event_hints = {
+            '100m': "100m: World class ~9.80-10.00s, Asian level ~10.00-10.20s",
+            '200m': "200m: World class ~19.70-20.00s, Asian level ~20.00-20.50s",
+            '400m': "400m: World class ~43.50-44.50s, Asian level ~44.50-45.50s",
+            '800m': "800m: World class ~1:43-1:45, Asian level ~1:45-1:47",
+            '1500m': "1500m: World class ~3:28-3:32, Asian level ~3:32-3:38",
+            'long jump': "Long Jump: World class 8.20-8.50m, Asian level 8.00-8.20m",
+            'high jump': "High Jump: World class 2.30-2.40m, Asian level 2.25-2.32m",
+            'shot put': "Shot Put: World class 21-23m, Asian level 19-21m",
+        }
+
+        for event, hint in event_hints.items():
+            if event in query_lower:
+                context_parts.append(hint)
+                break
+
+        return "\n\n".join(context_parts)
+
+
+class OpenRouterClient:
+    """Client for OpenRouter API using OpenAI SDK."""
+
+    def __init__(self, api_key: str, model: str = DEFAULT_MODEL):
+        self.client = OpenAI(
+            base_url=OPENROUTER_BASE_URL,
+            api_key=api_key
+        )
+        self.model = model
+        # Use singleton context builder - avoids reloading data on each message
+        self.context_builder = get_context_builder()
+
+    def chat(self, messages: list, user_query: str = None) -> dict:
+        """Send chat completion request."""
+        try:
+            # Build context if this is a new user message
+            context = ""
+            if user_query:
+                context = self.context_builder.build_context(user_query)
+
+            # Prepare system message with context
+            system_content = ATHLETICS_KNOWLEDGE
+            if context and context != "General athletics query - using base knowledge.":
+                system_content += f"\n\nRELEVANT DATA:\n{context}"
+
+            # Build messages with system prompt
+            full_messages = [{"role": "system", "content": system_content}]
+            full_messages.extend(messages)
+
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=full_messages,
+                max_tokens=2048,
+                temperature=0.7
+            )
+
+            return {
+                "success": True,
+                "content": response.choices[0].message.content,
+                "model": response.model,
+                "usage": {
+                    "prompt_tokens": response.usage.prompt_tokens if response.usage else 0,
+                    "completion_tokens": response.usage.completion_tokens if response.usage else 0
+                },
+                "context_used": context
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "content": f"Error: {str(e)}"
+            }
 
 ###################################
 # 1) Streamlit Setup
@@ -59,8 +269,22 @@ def apply_team_saudi_theme():
         border-radius: 12px;
         color: white !important;
     }}
-    h1, h2, h3, h4, h5, h6 {{
+    /* Only apply teal to main content headings, not inside alert boxes */
+    .block-container > div > h1,
+    .block-container > div > h2,
+    .block-container > div > h3,
+    .block-container > div > h4,
+    .block-container > div > h5,
+    .block-container > div > h6,
+    .stTabs h1, .stTabs h2, .stTabs h3 {{
         color: {TEAL_PRIMARY} !important;
+    }}
+    /* Ensure text inside success/warning/info boxes is readable */
+    .stAlert p, .stAlert div, .stAlert span {{
+        color: inherit !important;
+    }}
+    .stSuccess p, .stSuccess div {{
+        color: white !important;
     }}
     label, .stTextInput label, .stSelectbox label, .stSlider label {{
         color: #DDD !important;
@@ -83,6 +307,9 @@ def apply_team_saudi_theme():
         border-radius: 12px;
         margin-bottom: 1rem;
         color: white;
+    }}
+    .athlete-card h1, .athlete-card h2, .athlete-card h3, .athlete-card h4 {{
+        color: white !important;
     }}
     .metric-card {{
         background: rgba(0, 113, 103, 0.15);
@@ -108,6 +335,10 @@ def apply_team_saudi_theme():
     [data-testid="stSidebar"] * {{
         color: white !important;
     }}
+    /* Ensure subheaders in expanders are visible */
+    .streamlit-expanderHeader {{
+        color: {TEAL_PRIMARY} !important;
+    }}
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
@@ -129,6 +360,10 @@ DB_PROFILES = os.path.join(SQL_DIR, 'ksa_athlete_profiles.db')
 ###################################
 # 4) Data Loading Functions
 ###################################
+
+# Cache TTL: 1 hour (3600 seconds) for Azure data, no TTL for local SQLite
+CACHE_TTL = 3600
+
 @st.cache_data
 def load_sqlite_table(db_path, table_name):
     try:
@@ -137,7 +372,7 @@ def load_sqlite_table(db_path, table_name):
     except Exception as e:
         return pd.DataFrame()
 
-@st.cache_data
+@st.cache_data(ttl=CACHE_TTL, show_spinner="Loading athlete profiles...")
 def load_athlete_profiles():
     """Load all athlete profile data from Azure Parquet or local SQLite."""
     # Try Azure/Parquet first (for Streamlit Cloud)
@@ -177,7 +412,7 @@ def load_athlete_profiles():
     except Exception as e:
         return None, None, None, None, None
 
-@st.cache_data
+@st.cache_data(ttl=CACHE_TTL, show_spinner="Loading qualification data...")
 def load_road_to_data():
     """Load Road to Tokyo qualification data from Azure or local CSV."""
     # Try Azure parquet first
@@ -208,7 +443,7 @@ def load_road_to_data():
     except:
         return pd.DataFrame()
 
-@st.cache_data
+@st.cache_data(ttl=CACHE_TTL, show_spinner="Loading standards...")
 def load_qualification_standards():
     """Load qualification standards from Azure or local CSV."""
     # Try Azure benchmarks first
@@ -351,12 +586,29 @@ def convert_time_to_seconds(time_val):
 
 
 ###################################
-# 5) Header
+# 5) Header with Logo
 ###################################
+# Load logo for header
+import base64
+
+def get_logo_base64():
+    """Load Saudi logo and convert to base64 for HTML embedding."""
+    logo_path = os.path.join(os.path.dirname(__file__), 'Saudilogo.png')
+    if os.path.exists(logo_path):
+        with open(logo_path, "rb") as f:
+            return base64.b64encode(f.read()).decode()
+    return None
+
+logo_b64 = get_logo_base64()
+logo_html = f'<img src="data:image/png;base64,{logo_b64}" style="height: 60px; margin-right: 1rem;">' if logo_b64 else ''
+
 st.markdown(f"""
-<div style="background: linear-gradient(135deg, {TEAL_PRIMARY} 0%, {TEAL_DARK} 100%); padding: 1.5rem; border-radius: 12px; margin-bottom: 1.5rem;">
-    <h1 style="color: white !important; margin: 0; font-size: 2rem;">Saudi Athletics Dashboard</h1>
-    <p style="color: rgba(255,255,255,0.9); margin: 0.5rem 0 0 0;">World Rankings, Performance Analysis & Road to Tokyo 2025</p>
+<div style="background: linear-gradient(135deg, {TEAL_PRIMARY} 0%, {TEAL_DARK} 100%); padding: 1.5rem; border-radius: 12px; margin-bottom: 1.5rem; display: flex; align-items: center;">
+    {logo_html}
+    <div>
+        <h1 style="color: white !important; margin: 0; font-size: 2rem;">Saudi Athletics Dashboard</h1>
+        <p style="color: rgba(255,255,255,0.9); margin: 0.5rem 0 0 0;">World Rankings, Performance Analysis & Road to Tokyo 2025</p>
+    </div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -378,7 +630,7 @@ if os.path.exists(DB_MEN_RANK):
 ###################################
 
 # Try Azure parquet first, fall back to SQLite
-@st.cache_data
+@st.cache_data(ttl=CACHE_TTL, show_spinner="Loading men's rankings...")
 def load_men_rankings():
     """Load men's rankings from Azure or SQLite."""
     if DATA_CONNECTOR_AVAILABLE:
@@ -399,7 +651,7 @@ def load_men_rankings():
             st.warning(f"Azure rankings error: {e}")
     return load_sqlite_table(DB_MEN_RANK, 'rankings_men_all_events')
 
-@st.cache_data
+@st.cache_data(ttl=CACHE_TTL, show_spinner="Loading women's rankings...")
 def load_women_rankings():
     """Load women's rankings from Azure or SQLite."""
     if DATA_CONNECTOR_AVAILABLE:
@@ -419,7 +671,7 @@ def load_women_rankings():
             st.warning(f"Azure rankings error: {e}")
     return load_sqlite_table(DB_WOMEN_RANK, 'rankings_women_all_events')
 
-@st.cache_data
+@st.cache_data(ttl=CACHE_TTL, show_spinner="Loading KSA rankings...")
 def load_ksa_combined_rankings():
     """Load KSA rankings from Azure or SQLite."""
     if DATA_CONNECTOR_AVAILABLE:
@@ -439,8 +691,8 @@ def load_ksa_combined_rankings():
             st.warning(f"Azure KSA rankings error: {e}")
     return pd.DataFrame()
 
-men_rankings = load_men_rankings()
-women_rankings = load_women_rankings()
+# NOTE: Large rankings data is loaded lazily in tabs that need it
+# This improves startup performance significantly
 
 try:
     ksa_men_results = load_sqlite_table(DB_KSA_MEN, 'ksa_modal_results_men')
@@ -452,24 +704,31 @@ try:
 except:
     ksa_women_results = None
 
-# Load athlete profiles
+# Load athlete profiles (smaller dataset - OK to load upfront)
 athletes_df, rankings_df, breakdown_df, pbs_df, progression_df = load_athlete_profiles()
 
-# Load Road to Tokyo and qualification data
-road_to_df = load_road_to_data()
-qual_standards_df = load_qualification_standards()
+# Load Road to Tokyo and qualification data (lazy load)
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def get_road_to_df():
+    return load_road_to_data()
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def get_qual_standards_df():
+    return load_qualification_standards()
 
 ###################################
 # 7) Tabs
 ###################################
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     'Event Standards & Progression',
     'Athlete Profiles',
     'Combined Rankings',
     'Saudi Athletes Rankings',
     'World Champs Qualification',
     'Major Games Analytics',
-    'What It Takes to Win (Live)'
+    'What It Takes to Win (Live)',
+    'AI Analyst',
+    'Coach View'
 ])
 
 ###################################
@@ -545,7 +804,8 @@ with tab1:
         with col4:
             # Show qualification standard if available
             qual_mark = "N/A"
-            if not qual_standards_df.empty:
+            qual_standards_df = get_qual_standards_df()
+            if qual_standards_df is not None and not qual_standards_df.empty:
                 # Handle both old CSV format (Display_Name) and new parquet format (Event)
                 event_search = selected_event.replace('-', ' ')
                 if 'Display_Name' in qual_standards_df.columns:
@@ -745,14 +1005,24 @@ with tab2:
                                 athlete_results = ksa_data[ksa_data['competitor'].str.upper().str.contains(last_name, na=False)]
 
                             if not athlete_results.empty:
+                                # Determine actual primary event from results (most competitions)
+                                if 'event' in athlete_results.columns:
+                                    event_counts = athlete_results['event'].value_counts()
+                                    if not event_counts.empty:
+                                        actual_primary_event = event_counts.index[0]
+                                        st.markdown(f"<p style='color: {GOLD_ACCENT}; font-size: 0.9rem;'><strong>Main Event:</strong> {actual_primary_event} ({event_counts.iloc[0]} results)</p>", unsafe_allow_html=True)
+
                                 st.subheader("Competition Results")
 
-                                # Show best results per event
+                                # Show best results per event - remove duplicates
                                 if 'event' in athlete_results.columns and 'result' in athlete_results.columns:
-                                    # Group by event and get best result
                                     display_cols = ['event', 'result', 'date', 'venue', 'rank']
                                     display_cols = [c for c in display_cols if c in athlete_results.columns]
                                     results_display = athlete_results[display_cols].copy()
+
+                                    # Remove duplicate rows
+                                    results_display = results_display.drop_duplicates()
+
                                     results_display.columns = [c.title() for c in results_display.columns]
 
                                     # Sort by date descending
@@ -820,12 +1090,16 @@ with tab3:
     st.header('Combined Rankings')
     gender = st.selectbox('Select Gender', ['All', 'Men', 'Women'], index=1, key="combined_gender")
 
-    if gender == 'Men':
-        data = men_rankings.copy()
-    elif gender == 'Women':
-        data = women_rankings.copy()
-    else:
-        data = pd.concat([men_rankings, women_rankings])
+    # Lazy load rankings only when this tab is accessed
+    with st.spinner("Loading rankings..."):
+        if gender == 'Men':
+            data = load_men_rankings()
+        elif gender == 'Women':
+            data = load_women_rankings()
+        else:
+            men_rankings = load_men_rankings()
+            women_rankings = load_women_rankings()
+            data = pd.concat([men_rankings, women_rankings])
 
     if not data.empty and 'Event Type' in data.columns:
         events = sorted(data['Event Type'].dropna().unique())
@@ -848,14 +1122,8 @@ with tab3:
 with tab4:
     st.header('Saudi Athletes Rankings')
 
-    # Try to get KSA data from existing rankings first
-    saudi_men = men_rankings[men_rankings['Country'].str.upper().str.contains('KSA', na=False)] if not men_rankings.empty and 'Country' in men_rankings.columns else pd.DataFrame()
-    saudi_women = women_rankings[women_rankings['Country'].str.upper().str.contains('KSA', na=False)] if not women_rankings.empty and 'Country' in women_rankings.columns else pd.DataFrame()
-    saudi_combined = pd.concat([saudi_men, saudi_women])
-
-    # If no KSA data from filtered rankings, try direct Azure load
-    if saudi_combined.empty and DATA_CONNECTOR_AVAILABLE:
-        saudi_combined = load_ksa_combined_rankings()
+    # Load KSA data directly - much faster than filtering full rankings
+    saudi_combined = load_ksa_combined_rankings()
 
     if not saudi_combined.empty:
         # Show data mode indicator
@@ -885,7 +1153,11 @@ with tab5:
     # Show data source indicator
     mode = get_data_mode() if DATA_CONNECTOR_AVAILABLE else 'local'
 
-    if not road_to_df.empty:
+    # Lazy load qualification data
+    road_to_df = get_road_to_df()
+    qual_standards_df = get_qual_standards_df()
+
+    if road_to_df is not None and not road_to_df.empty:
         # Get KSA athlete names for matching
         ksa_names = []
         if athletes_df is not None and not athletes_df.empty:
@@ -965,7 +1237,7 @@ with tab5:
         st.warning("No qualification data found. Data may still be loading from Azure.")
 
     # Show qualification standards (from benchmarks parquet)
-    if not qual_standards_df.empty:
+    if qual_standards_df is not None and not qual_standards_df.empty:
         st.subheader("Performance Standards")
 
         # Check which columns exist (benchmarks parquet has different structure)
@@ -1007,9 +1279,10 @@ with tab6:
 
     major_summary = analytics.major_games.get_major_games_summary()
 
-    if 'error' not in major_summary:
+    if 'error' not in major_summary and len(major_summary) > 0:
         # Create metrics row
-        cols = st.columns(len(major_summary) if len(major_summary) <= 6 else 6)
+        num_cols = min(len(major_summary), 6)
+        cols = st.columns(num_cols)
 
         game_colors = {
             'Olympic': '#FFD700',
@@ -1154,30 +1427,50 @@ with tab6:
             st.warning("Athlete profiles database not found")
 
     else:
-        st.error("Could not load major games data. Please ensure athlete profiles are populated.")
+        if 'error' in major_summary:
+            st.error("Could not load major games data.")
+            error_msg = major_summary.get('error', 'Unknown error')
+            st.info(f"Details: {error_msg}")
+        else:
+            st.warning("No major games data available.")
+        if DATA_CONNECTOR_AVAILABLE:
+            st.caption(f"Data mode: {get_data_mode()} | Try refreshing the page - Azure may be waking up.")
 
 ###################################
 # Tab 7: What It Takes to Win (Live Data)
 ###################################
 with tab7:
-    st.header("What It Takes to Win (Live Data)")
+    st.header("What It Takes to Win")
     st.markdown(f"""
     <p style='color: #ccc; font-size: 0.95em;'>
-    Analysis of <strong style="color: {GOLD_ACCENT};">global performance standards</strong> from World Athletics top lists.
-    See what marks are needed to medal at <strong style="color: {TEAL_PRIMARY};">World Championships</strong> level.
-    Data sourced from 2024-2025 season rankings.
+    Performance standards from <strong style="color: #FFD700;">Olympics</strong>,
+    <strong style="color: {GOLD_ACCENT};">World Championships</strong>,
+    <strong style="color: {TEAL_PRIMARY};">Asian Games</strong>, and
+    <strong style="color: {TEAL_LIGHT};">Arab Championships</strong>.
+    Shows what marks are needed to medal across all levels and seasons.
     </p>
     """, unsafe_allow_html=True)
 
-    # Initialize What It Takes to Win analyzer
+    # Initialize What It Takes to Win analyzer and load data
     @st.cache_resource
     def get_wittw_analyzer():
-        return WhatItTakesToWin()
+        analyzer = WhatItTakesToWin()
+        analyzer.load_scraped_data()
+        return analyzer
 
     wittw = get_wittw_analyzer()
-    wittw.load_scraped_data()
+
+    # Show data source
+    if DATA_CONNECTOR_AVAILABLE:
+        st.caption(f"Data source: Azure Parquet ({len(wittw.data):,} records)" if wittw.data is not None else "Loading...")
+    else:
+        st.caption("Data source: Local files")
 
     if wittw.data is not None and len(wittw.data) > 0:
+        # Show available columns for debugging
+        available_cols = wittw.data.columns.tolist()
+        has_venue = any(c in available_cols for c in ['venue', 'Venue', 'Competition', 'competition'])
+
         # Summary metrics
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -1188,22 +1481,38 @@ with tab7:
             years = wittw.get_available_years()
             st.metric("Years", f"{min(years) if years else 'N/A'}-{max(years) if years else 'N/A'}")
 
+        # Data quality indicator
+        with st.expander("Data Status", expanded=False):
+            st.caption(f"Columns: {available_cols}")
+            if has_venue:
+                st.success("Competition/venue data available - filtering enabled")
+            else:
+                st.warning("No venue column - competition filtering will show all data. The scraped data may be ranking-only format.")
+
         st.markdown("---")
 
-        # Gender and Year selection
-        col1, col2 = st.columns(2)
+        # Competition Level, Gender and Year selection
+        col1, col2, col3 = st.columns(3)
         with col1:
-            wittw_gender = st.selectbox("Select Gender", ['men', 'women'], index=0, key="wittw_gender")
+            comp_types = wittw.get_competition_types()
+            wittw_comp = st.selectbox("Competition Level", comp_types, index=0, key="wittw_comp")
         with col2:
+            wittw_gender = st.selectbox("Select Gender", ['men', 'women'], index=0, key="wittw_gender")
+        with col3:
             year_options = ['All Years'] + [str(y) for y in wittw.get_available_years()]
             wittw_year = st.selectbox("Select Year", year_options, index=0, key="wittw_year")
 
         selected_year = None if wittw_year == 'All Years' else int(wittw_year)
 
-        # Generate What It Takes to Win Report
-        st.subheader(f"Medal Standards - {wittw_gender.title()} ({wittw_year})")
+        # Filter by competition type
+        if wittw_comp != 'All':
+            filtered_data = wittw.filter_by_competition(wittw_comp)
+            st.caption(f"Filtered to {wittw_comp}: {len(filtered_data):,} records")
 
-        report = wittw.generate_what_it_takes_report(wittw_gender, selected_year)
+        # Generate What It Takes to Win Report
+        st.subheader(f"Medal Standards - {wittw_gender.title()} ({wittw_year}) - {wittw_comp}")
+
+        report = wittw.generate_what_it_takes_report(wittw_gender, selected_year, wittw_comp)
 
         if len(report) > 0:
             # Event category filter
@@ -1293,77 +1602,117 @@ with tab7:
                         </div>
                         """, unsafe_allow_html=True)
 
+                    # Top Athletes Progression - Shows what it really takes to win
+                    st.markdown("---")
+                    st.subheader("Top Athletes Progression")
+                    st.markdown(f"<p style='color: #aaa;'>Year-by-year progression of top athletes in {selected_event}</p>", unsafe_allow_html=True)
+
+                    progression_df = wittw.get_top_athletes_progression(selected_event, wittw_gender, top_n=10)
+                    if not progression_df.empty:
+                        # Show core columns first
+                        display_cols = ['Athlete', 'Country', 'Best', 'Performances', 'Years_Active']
+                        # Add year columns
+                        year_cols = [c for c in progression_df.columns if c.startswith('Y20')]
+                        year_cols = sorted(year_cols, reverse=True)[:5]  # Last 5 years
+                        display_cols.extend(year_cols)
+
+                        st.dataframe(
+                            progression_df[[c for c in display_cols if c in progression_df.columns]],
+                            use_container_width=True,
+                            hide_index=True
+                        )
+                    else:
+                        st.info("No progression data available for this event.")
+
                     # KSA Athlete Comparison
                     st.markdown("---")
                     st.subheader("Compare KSA Athlete")
 
-                    # Get KSA athletes for this event
-                    profiles_db = os.path.join(SQL_DIR, 'ksa_athlete_profiles.db')
-                    if os.path.exists(profiles_db):
-                        conn = sqlite3.connect(profiles_db)
-                        ksa_athletes = pd.read_sql("""
-                            SELECT DISTINCT a.full_name, p.pb_result, p.event_name
-                            FROM ksa_athletes a
-                            LEFT JOIN athlete_pbs p ON a.athlete_id = p.athlete_id
-                            WHERE p.pb_result IS NOT NULL
-                        """, conn)
-                        conn.close()
+                    # Get KSA athletes from Azure or local
+                    ksa_athletes = pd.DataFrame()
+                    if DATA_CONNECTOR_AVAILABLE:
+                        try:
+                            ksa_data = get_ksa_rankings()
+                            if ksa_data is not None and not ksa_data.empty:
+                                # Get best result per athlete per event
+                                comp_col = 'competitor' if 'competitor' in ksa_data.columns else 'Athlete'
+                                evt_col = 'event' if 'event' in ksa_data.columns else 'Event Type'
+                                res_col = 'result' if 'result' in ksa_data.columns else 'Result'
 
-                        if not ksa_athletes.empty:
-                            ksa_options = ['Select athlete...'] + sorted(ksa_athletes['full_name'].unique().tolist())
-                            compare_athlete = st.selectbox("Select KSA Athlete to Compare",
-                                                          ksa_options, key="wittw_compare")
+                                if comp_col in ksa_data.columns:
+                                    ksa_athletes = ksa_data.groupby([comp_col, evt_col])[res_col].first().reset_index()
+                                    ksa_athletes.columns = ['full_name', 'event_name', 'pb_result']
+                        except Exception as e:
+                            st.warning(f"Could not load KSA data: {e}")
 
-                            if compare_athlete != 'Select athlete...':
-                                # Get athlete's PB for event
-                                athlete_pbs = ksa_athletes[ksa_athletes['full_name'] == compare_athlete]
-                                event_match = athlete_pbs[athlete_pbs['event_name'].str.contains(
-                                    selected_event.replace('-', ' ').replace('metres', 'm'),
-                                    case=False, na=False
-                                )]
+                    # Fall back to SQLite if Azure not available
+                    if ksa_athletes.empty:
+                        profiles_db = os.path.join(SQL_DIR, 'ksa_athlete_profiles.db')
+                        if os.path.exists(profiles_db):
+                            conn = sqlite3.connect(profiles_db)
+                            ksa_athletes = pd.read_sql("""
+                                SELECT DISTINCT a.full_name, p.pb_result, p.event_name
+                                FROM ksa_athletes a
+                                LEFT JOIN athlete_pbs p ON a.athlete_id = p.athlete_id
+                                WHERE p.pb_result IS NOT NULL
+                            """, conn)
+                            conn.close()
 
-                                if not event_match.empty:
-                                    pb_str = event_match.iloc[0]['pb_result']
-                                    is_field = wittw.is_field_event(selected_event)
+                    if not ksa_athletes.empty:
+                        ksa_options = ['Select athlete...'] + sorted(ksa_athletes['full_name'].unique().tolist())
+                        compare_athlete = st.selectbox("Select KSA Athlete to Compare",
+                                                      ksa_options, key="wittw_compare")
 
-                                    if is_field:
-                                        athlete_mark = wittw.parse_distance_to_meters(pb_str)
-                                    else:
-                                        athlete_mark = wittw.parse_time_to_seconds(pb_str)
+                        if compare_athlete != 'Select athlete...':
+                            # Get athlete's PB for event
+                            athlete_pbs = ksa_athletes[ksa_athletes['full_name'] == compare_athlete]
+                            event_match = athlete_pbs[athlete_pbs['event_name'].str.contains(
+                                selected_event.replace('-', ' ').replace('metres', 'm'),
+                                case=False, na=False
+                            )]
 
-                                    if athlete_mark:
-                                        comparison = wittw.compare_athlete_to_standards(
-                                            athlete_mark, selected_event, wittw_gender, selected_year
-                                        )
+                            if not event_match.empty:
+                                pb_str = event_match.iloc[0]['pb_result']
+                                is_field = wittw.is_field_event(selected_event)
 
-                                        # Position indicator
-                                        position_colors = {
-                                            'Gold Medal': '#FFD700',
-                                            'Silver Medal': '#C0C0C0',
-                                            'Bronze Medal': '#CD7F32',
-                                            'Finals': TEAL_PRIMARY,
-                                            'Outside Finals': GRAY_BLUE
-                                        }
-
-                                        pos_color = position_colors.get(comparison['projected_position'], GRAY_BLUE)
-
-                                        st.markdown(f"""
-                                        <div style="background: {pos_color}22; border: 2px solid {pos_color};
-                                                    border-radius: 10px; padding: 1.5rem; text-align: center;">
-                                            <p style="color: #aaa; margin: 0;">Personal Best</p>
-                                            <p style="color: white; font-size: 2rem; font-weight: bold; margin: 0.5rem 0;">
-                                                {comparison['athlete_mark_formatted']}
-                                            </p>
-                                            <p style="color: {pos_color}; font-size: 1.2rem; font-weight: bold;">
-                                                Projected: {comparison['projected_position']}
-                                            </p>
-                                            <p style="color: #aaa; margin-top: 0.5rem;">
-                                                Gap to Gold: {comparison['gap_to_gold_formatted']}
-                                            </p>
-                                        </div>
-                                        """, unsafe_allow_html=True)
+                                if is_field:
+                                    athlete_mark = wittw.parse_distance_to_meters(pb_str)
                                 else:
-                                    st.info(f"No PB found for {compare_athlete} in {selected_event}")
+                                    athlete_mark = wittw.parse_time_to_seconds(pb_str)
+
+                                if athlete_mark:
+                                    comparison = wittw.compare_athlete_to_standards(
+                                        athlete_mark, selected_event, wittw_gender, selected_year
+                                    )
+
+                                    # Position indicator
+                                    position_colors = {
+                                        'Gold Medal': '#FFD700',
+                                        'Silver Medal': '#C0C0C0',
+                                        'Bronze Medal': '#CD7F32',
+                                        'Finals': TEAL_PRIMARY,
+                                        'Outside Finals': GRAY_BLUE
+                                    }
+
+                                    pos_color = position_colors.get(comparison['projected_position'], GRAY_BLUE)
+
+                                    st.markdown(f"""
+                                    <div style="background: {pos_color}22; border: 2px solid {pos_color};
+                                                border-radius: 10px; padding: 1.5rem; text-align: center;">
+                                        <p style="color: #aaa; margin: 0;">Personal Best</p>
+                                        <p style="color: white; font-size: 2rem; font-weight: bold; margin: 0.5rem 0;">
+                                            {comparison['athlete_mark_formatted']}
+                                        </p>
+                                        <p style="color: {pos_color}; font-size: 1.2rem; font-weight: bold;">
+                                            Projected: {comparison['projected_position']}
+                                        </p>
+                                        <p style="color: #aaa; margin-top: 0.5rem;">
+                                            Gap to Gold: {comparison['gap_to_gold_formatted']}
+                                        </p>
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                            else:
+                                st.info(f"No PB found for {compare_athlete} in {selected_event}")
 
                     # Year over Year Trends
                     st.markdown("---")
@@ -1409,10 +1758,314 @@ with tab7:
                         st.info("Not enough data for trend analysis. Need multiple years of data.")
 
         else:
-            st.warning("No report data available. Please run the scraper first.")
+            st.warning("No report data available for the selected filters.")
+            st.info(f"Data loaded: {len(wittw.data):,} records | Available events: {len(wittw.get_available_events())}")
+
+            # Help diagnose the issue
+            venue_col = None
+            for col in ['venue', 'Venue', 'Competition', 'competition']:
+                if col in wittw.data.columns:
+                    venue_col = col
+                    break
+
+            if venue_col and wittw_comp != 'All':
+                st.caption(f"Tried to filter by '{wittw_comp}' but no matching venues found.")
+                st.caption(f"Available columns: {list(wittw.data.columns)}")
+            elif not venue_col and wittw_comp != 'All':
+                st.caption(f"No venue column available - try selecting 'All' as Competition Level to see all data.")
+            else:
+                st.caption("Try selecting different filters (Gender, Year) or 'All' for Competition Level.")
     else:
-        st.warning("No scraped data found. Please run the world_athletics_scraperv2 to fetch current data.")
-        st.code("cd world_athletics_scraperv2 && python main.py", language="bash")
+        st.warning("No performance data loaded.")
+        if DATA_CONNECTOR_AVAILABLE:
+            mode = get_data_mode()
+            st.info(f"Data mode: {mode}")
+            if mode == "azure":
+                st.caption("Azure connection may be slow on first load. Try refreshing the page.")
+            else:
+                st.caption("Azure not configured. Using local data mode.")
+        else:
+            st.caption("Data connector not available. Check data_connector.py")
+
+###################################
+# Tab 8: AI Analyst (Chatbot)
+###################################
+with tab8:
+    st.markdown(f"""
+    <div style="background: linear-gradient(135deg, {TEAL_PRIMARY} 0%, {TEAL_DARK} 100%); padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
+        <h2 style="color: white; margin: 0;">AI Athletics Analyst</h2>
+        <p style="color: rgba(255,255,255,0.9); margin: 0.5rem 0 0 0;">
+            Ask questions about athlete performance, competition standards, and strategic insights.
+            Powered by free AI models via OpenRouter.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Initialize session state for chatbot
+    if 'chatbot_messages' not in st.session_state:
+        st.session_state.chatbot_messages = []
+    if 'chatbot_model' not in st.session_state:
+        st.session_state.chatbot_model = DEFAULT_MODEL
+
+    # Check for API key
+    api_key = get_openrouter_key()
+
+    if not api_key:
+        st.warning("OpenRouter API key not configured.")
+        st.info("""
+        **To enable the AI Analyst:**
+        1. Get a free API key from [OpenRouter](https://openrouter.ai/keys)
+        2. Add to your `.env` file: `OPENROUTER_API_KEY=sk-or-v1-your-key-here`
+        3. Or add to Streamlit secrets for cloud deployment
+        """)
+    else:
+        # Controls row
+        col1, col2, col3 = st.columns([2, 2, 1])
+
+        with col1:
+            # Model selection
+            model_names = list(FREE_MODELS.values())
+            model_keys = list(FREE_MODELS.keys())
+            current_idx = model_keys.index(st.session_state.chatbot_model) if st.session_state.chatbot_model in model_keys else 0
+
+            selected_model_name = st.selectbox(
+                "AI Model",
+                model_names,
+                index=current_idx,
+                key="chatbot_model_select"
+            )
+            selected_model_key = model_keys[model_names.index(selected_model_name)]
+            st.session_state.chatbot_model = selected_model_key
+
+        with col2:
+            # Data status
+            if DATA_CONNECTOR_AVAILABLE:
+                data_mode = get_data_mode()
+                st.markdown(f"""
+                <div style="background: rgba(0, 113, 103, 0.2); padding: 0.5rem 1rem; border-radius: 4px; margin-top: 1.7rem;">
+                    <span style="color: {TEAL_LIGHT};">Data: {data_mode.upper()}</span>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                <div style="background: rgba(160, 142, 102, 0.2); padding: 0.5rem 1rem; border-radius: 4px; margin-top: 1.7rem;">
+                    <span style="color: {GOLD_ACCENT};">Data: Limited</span>
+                </div>
+                """, unsafe_allow_html=True)
+
+        with col3:
+            # Clear chat button
+            if st.button("Clear Chat", key="chatbot_clear", use_container_width=True):
+                st.session_state.chatbot_messages = []
+                st.rerun()
+
+        st.markdown("---")
+
+        # === CONTEXT FILTER: Select Athlete and Event ===
+        with st.expander("Filter Context (Optional)", expanded=False):
+            st.caption("Select an athlete and/or event to focus your question. This helps ensure accurate name matching.")
+
+            filter_col1, filter_col2, filter_col3 = st.columns([2, 2, 1])
+
+            # Get available athletes from data
+            available_athletes = ["(All Athletes)"]
+            available_events = ["(All Events)"]
+
+            if DATA_CONNECTOR_AVAILABLE:
+                try:
+                    ksa_df = get_ksa_athletes()
+                    if ksa_df is not None and not ksa_df.empty:
+                        # Get athlete names
+                        name_col = 'competitor' if 'competitor' in ksa_df.columns else 'full_name' if 'full_name' in ksa_df.columns else None
+                        if name_col:
+                            athlete_names = sorted(ksa_df[name_col].dropna().unique().tolist())
+                            available_athletes.extend(athlete_names)
+
+                        # Get events
+                        if 'event' in ksa_df.columns:
+                            events = sorted(ksa_df['event'].dropna().unique().tolist())
+                            available_events.extend(events)
+                        elif 'primary_event' in ksa_df.columns:
+                            events = sorted(ksa_df['primary_event'].dropna().unique().tolist())
+                            available_events.extend(events)
+                except Exception:
+                    pass
+
+            with filter_col1:
+                selected_ai_athlete = st.selectbox(
+                    "Athlete",
+                    available_athletes,
+                    index=0,
+                    key="ai_athlete_filter"
+                )
+
+            with filter_col2:
+                selected_ai_event = st.selectbox(
+                    "Event",
+                    available_events,
+                    index=0,
+                    key="ai_event_filter"
+                )
+
+            # AUTO-APPLY context when athlete or event is selected (no button needed)
+            context_prefix = ""
+            if selected_ai_athlete != "(All Athletes)":
+                context_prefix += f"About {selected_ai_athlete}"
+            if selected_ai_event != "(All Events)":
+                if context_prefix:
+                    context_prefix += f" in {selected_ai_event}"
+                else:
+                    context_prefix += f"About {selected_ai_event}"
+
+            # Store the context prefix
+            st.session_state['ai_context_prefix'] = context_prefix
+
+            with filter_col3:
+                if context_prefix:
+                    st.success(f"**{context_prefix}**")
+                    if st.button("Clear", key="clear_ai_context", use_container_width=True):
+                        # Reset selections to "(All)"
+                        st.session_state['ai_athlete_filter'] = "(All Athletes)"
+                        st.session_state['ai_event_filter'] = "(All Events)"
+                        st.session_state['ai_context_prefix'] = ""
+                        st.rerun()
+                else:
+                    st.caption("Select athlete/event to focus your question")
+
+        st.markdown("---")
+
+        # Chat messages display
+        chat_container = st.container()
+        with chat_container:
+            for msg in st.session_state.chatbot_messages:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+                    # Show sources if available
+                    if msg["role"] == "assistant" and msg.get("context"):
+                        with st.expander("View Data Sources"):
+                            st.text(msg["context"])
+
+        # Input area (using text_input + button since chat_input doesn't work in tabs)
+        st.markdown("<br>", unsafe_allow_html=True)
+        input_col, btn_col = st.columns([5, 1])
+
+        # Build dynamic placeholder based on context
+        current_context = st.session_state.get('ai_context_prefix', '')
+        if current_context:
+            placeholder_text = f"Ask about {current_context.replace('About ', '')}..."
+        else:
+            placeholder_text = "Ask about athletics performance, KSA athletes, qualification standards..."
+
+        with input_col:
+            user_input = st.text_input(
+                "Your question",
+                placeholder=placeholder_text,
+                key="chatbot_input",
+                label_visibility="collapsed"
+            )
+
+        with btn_col:
+            send_clicked = st.button("Send", key="chatbot_send", type="primary", use_container_width=True)
+
+        # Process input
+        if send_clicked and user_input:
+            # Check for context prefix (from athlete/event filter)
+            context_prefix = st.session_state.get('ai_context_prefix', '')
+            if context_prefix:
+                # Prepend context to query for better matching
+                enhanced_query = f"{context_prefix}: {user_input}"
+                # DON'T clear the prefix - keep it for follow-up questions
+                # st.session_state['ai_context_prefix'] = ""
+            else:
+                enhanced_query = user_input
+
+            # Add user message (show original to user)
+            st.session_state.chatbot_messages.append({
+                "role": "user",
+                "content": user_input
+            })
+
+            # Create client and get response
+            with st.spinner("Analyzing..."):
+                client = OpenRouterClient(api_key, st.session_state.chatbot_model)
+
+                # Prepare messages for API (without context field)
+                api_messages = [{"role": m["role"], "content": m["content"]}
+                               for m in st.session_state.chatbot_messages]
+
+                # Use enhanced query for context building
+                response = client.chat(api_messages, user_query=enhanced_query)
+
+            # Add assistant response
+            st.session_state.chatbot_messages.append({
+                "role": "assistant",
+                "content": response["content"],
+                "context": response.get("context_used", "")
+            })
+
+            # Clear input and rerun to show new messages
+            st.rerun()
+
+        # Example questions
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown(f"<p style='color: #888; font-size: 0.85rem;'>Example questions:</p>", unsafe_allow_html=True)
+
+        example_cols = st.columns(3)
+        example_questions = [
+            "How are KSA sprinters performing in 2024?",
+            "What time is needed to qualify for World Championships in 100m?",
+            "Compare our 400m athletes to qualification standards"
+        ]
+
+        for i, (col, question) in enumerate(zip(example_cols, example_questions)):
+            with col:
+                if st.button(question, key=f"example_{i}", use_container_width=True):
+                    st.session_state.chatbot_messages.append({
+                        "role": "user",
+                        "content": question
+                    })
+                    # Trigger processing
+                    with st.spinner("Analyzing..."):
+                        client = OpenRouterClient(api_key, st.session_state.chatbot_model)
+                        api_messages = [{"role": m["role"], "content": m["content"]}
+                                       for m in st.session_state.chatbot_messages]
+                        response = client.chat(api_messages, user_query=question)
+
+                    st.session_state.chatbot_messages.append({
+                        "role": "assistant",
+                        "content": response["content"],
+                        "context": response.get("context_used", "")
+                    })
+                    st.rerun()
+
+###################################
+# Tab 9: Coach View
+###################################
+with tab9:
+    if COACH_VIEW_AVAILABLE:
+        # Load master rankings data for Coach View
+        try:
+            if DATA_CONNECTOR_AVAILABLE:
+                coach_df = get_rankings_data()
+                if coach_df is not None and not coach_df.empty:
+                    render_coach_view(coach_df)
+                else:
+                    st.warning("No data available for Coach View. Please ensure data is loaded.")
+            else:
+                st.error("Data connector not available. Coach View requires the data_connector module.")
+        except Exception as e:
+            st.error(f"Error loading Coach View: {str(e)}")
+            st.info("Coach View requires the master rankings data to be available.")
+    else:
+        st.warning("Coach View module not available.")
+        st.info("""
+        The Coach View module provides:
+        - **Competition Prep Hub** - Prepare athletes for upcoming championships
+        - **Athlete Report Cards** - Comprehensive performance analysis with projections
+        - **Competitor Watch** - Monitor rivals and competitive landscape
+
+        To enable, ensure `coach_view.py` and its dependencies are installed.
+        """)
 
 ###################################
 # Footer

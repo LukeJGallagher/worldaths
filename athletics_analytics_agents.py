@@ -14,6 +14,16 @@ from typing import Dict, List, Optional, Tuple
 ###################################
 SQL_DIR = os.path.join(os.path.dirname(__file__), 'SQL')
 
+# Try to import Azure/Parquet data connector
+try:
+    from data_connector import (
+        get_ksa_rankings, get_rankings_data, get_ksa_athletes,
+        get_data_mode, _download_parquet_from_azure
+    )
+    DATA_CONNECTOR_AVAILABLE = True
+except ImportError:
+    DATA_CONNECTOR_AVAILABLE = False
+
 ###################################
 # Athletics Knowledge Base
 ###################################
@@ -211,9 +221,55 @@ class BaseAthleticsAgent:
 
     def __init__(self):
         self.sql_dir = SQL_DIR
+        self._cached_master_data = None
+
+    def _get_master_data(self):
+        """Get master parquet data (cached)."""
+        if self._cached_master_data is not None:
+            return self._cached_master_data
+
+        if DATA_CONNECTOR_AVAILABLE:
+            try:
+                df = get_rankings_data()
+                if df is not None and not df.empty:
+                    self._cached_master_data = df
+                    return df
+            except Exception as e:
+                print(f"Warning: Could not load Azure data: {e}")
+
+        return pd.DataFrame()
 
     def load_ksa_data(self, gender='men'):
-        """Load KSA athlete data from database."""
+        """Load KSA athlete data from Azure parquet or local database."""
+        # Try Azure parquet first
+        if DATA_CONNECTOR_AVAILABLE:
+            try:
+                df = get_ksa_rankings()
+                if df is not None and not df.empty:
+                    # Filter by gender if possible
+                    if 'gender' in df.columns:
+                        gender_code = 'M' if gender == 'men' else 'F'
+                        df = df[(df['gender'].str.lower() == gender.lower()) |
+                                (df['gender'] == gender_code)]
+
+                    # Rename columns to match expected format
+                    column_map = {
+                        'competitor': 'Athlete',
+                        'event': 'Event Type',
+                        'result': 'Result',
+                        'date': 'Date',
+                        'venue': 'Competition',
+                        'rank': 'Rank'
+                    }
+                    for old_col, new_col in column_map.items():
+                        if old_col in df.columns and new_col not in df.columns:
+                            df = df.rename(columns={old_col: new_col})
+
+                    return df
+            except Exception as e:
+                print(f"Warning: Could not load Azure KSA data: {e}")
+
+        # Fall back to local SQLite
         db_path = os.path.join(self.sql_dir, f'ksa_modal_results_{gender}.db')
         if os.path.exists(db_path):
             try:
@@ -227,7 +283,17 @@ class BaseAthleticsAgent:
         return pd.DataFrame()
 
     def load_rankings(self, gender='men'):
-        """Load world rankings data."""
+        """Load world rankings data from Azure parquet or local database."""
+        # Try Azure parquet first
+        if DATA_CONNECTOR_AVAILABLE:
+            try:
+                df = get_rankings_data(gender=gender.capitalize())
+                if df is not None and not df.empty:
+                    return df
+            except Exception as e:
+                print(f"Warning: Could not load Azure rankings: {e}")
+
+        # Fall back to local SQLite
         db_path = os.path.join(self.sql_dir, f'rankings_{gender}_all_events.db')
         if os.path.exists(db_path):
             conn = sqlite3.connect(db_path)
@@ -587,8 +653,103 @@ class MajorGamesAnalyzer(BaseAthleticsAgent):
         self.major_games = MAJOR_GAMES
         self.profiles_db = os.path.join(self.sql_dir, 'ksa_athlete_profiles.db')
 
+    def _classify_game_category(self, competition_name: str) -> str:
+        """Classify competition into a major games category."""
+        if pd.isna(competition_name):
+            return None
+
+        comp_upper = str(competition_name).upper()
+
+        # Extended keywords for better matching
+        extended_keywords = {
+            'Olympic': ['OLYMPIC', 'OLYMPICS', 'OG 20', 'OG 202'],
+            'World Championships': ['WORLD ATHLETICS CHAMPIONSHIPS', 'WORLD CHAMPIONSHIPS', 'WCH', 'BUDAPEST', 'OREGON', 'DOHA', 'LONDON', 'BEIJING'],
+            'World U20': ['WORLD ATHLETICS U20', 'WORLD U20', 'WORLD JUNIOR'],
+            'Asian Games': ['ASIAN GAMES', 'ASIAD', 'HANGZHOU', 'JAKARTA'],
+            'Asian Championships': ['ASIAN ATHLETICS', 'ASIAN INDOOR', 'ASIAN CHAMP'],
+            'West Asian': ['WEST ASIAN', 'WEST ASIA'],
+            'Arab Championships': ['ARAB ATHLETICS', 'ARAB U18', 'ARAB U20', 'ARAB U23', 'PAN ARAB', 'ARAB CHAMP'],
+            'GCC': ['GCC YOUTH', 'GCC CHAMPION', 'GULF COOPERATION'],
+            'Diamond League': ['DIAMOND LEAGUE', 'DL ', 'ZURICH', 'BRUSSELS', 'MONACO', 'ROME'],
+        }
+
+        for category, keywords in extended_keywords.items():
+            for keyword in keywords:
+                if keyword in comp_upper:
+                    return category
+        return None
+
     def load_profiles_results(self):
-        """Load results from athlete profiles database."""
+        """Load results from Azure parquet or athlete profiles database."""
+        # Try Azure parquet first (master.parquet for KSA athletes)
+        if DATA_CONNECTOR_AVAILABLE:
+            try:
+                # First try to get KSA rankings from Azure
+                df = get_ksa_rankings()
+                if df is not None and not df.empty:
+                    print(f"Loaded {len(df)} KSA rankings from Azure")
+                    print(f"KSA Rankings columns: {df.columns.tolist()}")
+
+                    # Add game_category based on competition/venue name
+                    # Try multiple possible column names
+                    comp_col = None
+                    for col_name in ['venue', 'Venue', 'Competition', 'competition', 'comp', 'meet']:
+                        if col_name in df.columns:
+                            comp_col = col_name
+                            break
+
+                    if comp_col:
+                        df['game_category'] = df[comp_col].apply(self._classify_game_category)
+                        # Debug: count categorized
+                        categorized = df['game_category'].notna().sum()
+                        print(f"Categorized {categorized} out of {len(df)} rows as major games")
+                    else:
+                        print(f"No competition/venue column found. Available: {df.columns.tolist()}")
+                        df['game_category'] = None
+
+                    # Rename columns to match expected format
+                    column_map = {
+                        'competitor': 'full_name',
+                        'Competitor': 'full_name',
+                        'event': 'event_name',
+                        'Event': 'event_name',
+                        'result': 'result_value',
+                        'Result': 'result_value',
+                        'venue': 'competition_name',
+                        'Venue': 'competition_name',
+                        'rank': 'place',
+                        'Rank': 'place'
+                    }
+                    for old_col, new_col in column_map.items():
+                        if old_col in df.columns and new_col not in df.columns:
+                            df = df.rename(columns={old_col: new_col})
+
+                    # Ensure full_name exists
+                    if 'full_name' not in df.columns:
+                        for alt_name in ['competitor', 'Competitor', 'Name', 'name', 'Athlete', 'athlete']:
+                            if alt_name in df.columns:
+                                df['full_name'] = df[alt_name]
+                                break
+
+                    # Get primary event from ksa_profiles if available
+                    try:
+                        profiles = get_ksa_athletes()
+                        if profiles is not None and not profiles.empty and 'full_name' in df.columns:
+                            profile_map = dict(zip(profiles['full_name'].str.upper(),
+                                                   profiles.get('primary_event', '')))
+                            df['primary_event'] = df['full_name'].str.upper().map(profile_map)
+                    except:
+                        df['primary_event'] = df.get('event_name', '')
+
+                    return df
+                else:
+                    print("Warning: get_ksa_rankings() returned empty dataframe")
+            except Exception as e:
+                print(f"Warning: Could not load Azure profiles data: {e}")
+                import traceback
+                traceback.print_exc()
+
+        # Fall back to local SQLite profiles database
         if os.path.exists(self.profiles_db):
             try:
                 conn = sqlite3.connect(self.profiles_db)

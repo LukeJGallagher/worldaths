@@ -5,6 +5,11 @@ Automatically detects AZURE_STORAGE_CONNECTION_STRING to choose mode:
 - Azure mode: Downloads Parquet from Azure Blob, queries with DuckDB
 - Local mode: Queries Parquet files from local Data/parquet folder
 
+Performance optimizations:
+- TTL-based caching (1 hour default) to avoid repeated downloads
+- Singleton pattern for master data (only download once per session)
+- Streamlit cache integration when available
+
 Usage:
     from data_connector import query, get_ksa_athletes, get_competitors, get_benchmarks
 
@@ -16,6 +21,7 @@ Usage:
     competitors = get_competitors(event='100m', gender='Men', top_n=20)
 """
 import os
+import time
 import duckdb
 import pandas as pd
 from dotenv import load_dotenv
@@ -29,6 +35,9 @@ load_dotenv()
 CONTAINER_NAME = "personal-data"
 AZURE_FOLDER = "athletics"
 
+# Cache TTL in seconds (1 hour default)
+CACHE_TTL_SECONDS = 3600
+
 # Local paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOCAL_PARQUET_DIR = os.path.join(BASE_DIR, "Data", "parquet")
@@ -40,7 +49,8 @@ try:
 except ImportError:
     AZURE_SDK_AVAILABLE = False
 
-# Cache for downloaded parquet data
+# Cache for downloaded parquet data with timestamps
+# Format: {'blob_name': {'data': DataFrame, 'timestamp': float}}
 _PARQUET_CACHE = {}
 
 # Connection string cache (lazy-loaded)
@@ -89,13 +99,31 @@ def get_base_path() -> str:
         return LOCAL_PARQUET_DIR
 
 
-def _download_parquet_from_azure(blob_name: str) -> pd.DataFrame:
-    """Download parquet file from Azure Blob Storage using SDK (avoids DuckDB SSL issues)."""
-    global _PARQUET_CACHE
+def _download_parquet_from_azure(blob_name: str, force_refresh: bool = False) -> pd.DataFrame:
+    """
+    Download parquet file from Azure Blob Storage using SDK.
 
-    # Check cache first
-    if blob_name in _PARQUET_CACHE:
-        return _PARQUET_CACHE[blob_name]
+    Uses TTL-based caching to avoid repeated downloads.
+    Master.parquet (large file) is cached for the entire session.
+
+    Args:
+        blob_name: Name of the parquet file to download
+        force_refresh: If True, bypass cache and re-download
+
+    Returns:
+        DataFrame or None if download fails
+    """
+    global _PARQUET_CACHE
+    current_time = time.time()
+
+    # Check cache with TTL
+    if not force_refresh and blob_name in _PARQUET_CACHE:
+        cache_entry = _PARQUET_CACHE[blob_name]
+        cache_age = current_time - cache_entry['timestamp']
+
+        # Master.parquet is large - cache for entire session (no TTL check)
+        if blob_name == 'master.parquet' or cache_age < CACHE_TTL_SECONDS:
+            return cache_entry['data'].copy()  # Return copy to prevent mutation
 
     conn_str = _get_connection_string()
     if not conn_str or not AZURE_SDK_AVAILABLE:
@@ -110,11 +138,45 @@ def _download_parquet_from_azure(blob_name: str) -> pd.DataFrame:
         data = blob_client.download_blob().readall()
 
         df = pd.read_parquet(BytesIO(data))
-        _PARQUET_CACHE[blob_name] = df  # Cache it
-        return df
+
+        # Cache with timestamp
+        _PARQUET_CACHE[blob_name] = {
+            'data': df,
+            'timestamp': current_time
+        }
+
+        return df.copy()  # Return copy to prevent mutation
     except Exception as e:
         print(f"Azure download error for {blob_name}: {e}")
         return None
+
+
+def clear_cache(blob_name: str = None):
+    """
+    Clear the parquet cache.
+
+    Args:
+        blob_name: Specific blob to clear, or None to clear all
+    """
+    global _PARQUET_CACHE
+    if blob_name:
+        _PARQUET_CACHE.pop(blob_name, None)
+    else:
+        _PARQUET_CACHE.clear()
+
+
+def get_cache_status() -> dict:
+    """Get cache status for debugging."""
+    current_time = time.time()
+    status = {}
+    for name, entry in _PARQUET_CACHE.items():
+        age_seconds = current_time - entry['timestamp']
+        status[name] = {
+            'rows': len(entry['data']),
+            'age_seconds': round(age_seconds, 1),
+            'age_minutes': round(age_seconds / 60, 1)
+        }
+    return status
 
 
 def get_connection():
@@ -427,7 +489,7 @@ def get_country_list() -> list:
     return df['nat'].tolist()
 
 
-def get_rankings_data(gender: str = None, country: str = None) -> pd.DataFrame:
+def get_rankings_data(gender: str = None, country: str = None, limit: int = None) -> pd.DataFrame:
     """
     Get rankings data from master.parquet.
 
@@ -437,32 +499,25 @@ def get_rankings_data(gender: str = None, country: str = None) -> pd.DataFrame:
     Args:
         gender: Filter by 'Men' or 'Women' (optional)
         country: Filter by country code like 'KSA' (optional)
+        limit: Maximum rows to return (optional, for performance)
     """
-    # Try direct Azure download for Streamlit Cloud
-    if get_data_mode() == "azure":
-        df = _download_parquet_from_azure("master.parquet")
-        if df is not None:
-            # Apply filters
-            if gender:
-                gender_code = 'M' if gender == 'Men' else 'F'
-                df = df[(df['gender'] == gender) | (df['gender'] == gender_code)]
-            if country:
-                if 'nat' in df.columns:
-                    df = df[df['nat'].str.upper().str.contains(country.upper(), na=False)]
-                elif 'Country' in df.columns:
-                    df = df[df['Country'].str.upper().str.contains(country.upper(), na=False)]
-            return df
-
-    # Fall back to DuckDB query for local mode
-    sql = "SELECT * FROM master WHERE 1=1"
+    # Build SQL query with filters - avoid loading full dataset
+    conditions = []
 
     if gender:
         gender_code = 'M' if gender == 'Men' else 'F'
-        sql += f" AND (gender = '{gender}' OR gender = '{gender_code}')"
+        conditions.append(f"(gender = '{gender}' OR gender = '{gender_code}')")
 
     if country:
-        sql += f" AND (nat ILIKE '%{country}%' OR Country ILIKE '%{country}%')"
+        conditions.append(f"(nat ILIKE '%{country}%' OR Country ILIKE '%{country}%')")
 
+    where_clause = " AND ".join(conditions) if conditions else "1=1"
+    sql = f"SELECT * FROM master WHERE {where_clause}"
+
+    if limit:
+        sql += f" LIMIT {limit}"
+
+    # Use DuckDB to query parquet directly (much faster than loading full file)
     return query(sql)
 
 
@@ -473,18 +528,19 @@ def get_ksa_rankings() -> pd.DataFrame:
     Returns filtered view of master data for KSA athletes only,
     formatted similar to old SQLite rankings tables.
     """
-    # Try direct Azure download first
+    # Try direct Azure download first (avoids DuckDB SSL issues on Streamlit Cloud)
     if get_data_mode() == "azure":
         df = _download_parquet_from_azure("master.parquet")
-        if df is not None:
-            # Filter for KSA
-            if 'nat' in df.columns:
-                df = df[df['nat'].str.upper().str.contains('KSA', na=False)]
-            elif 'Country' in df.columns:
-                df = df[df['Country'].str.upper().str.contains('KSA', na=False)]
+        if df is not None and not df.empty:
+            # Filter for KSA athletes
+            mask = pd.Series([False] * len(df))
+            for col in ['nat', 'Nat', 'Country', 'country']:
+                if col in df.columns:
+                    mask = mask | df[col].astype(str).str.upper().str.contains('KSA', na=False)
+            df = df[mask]
             return df
 
-    # Fall back to DuckDB for local mode
+    # Fall back to DuckDB query (for local mode)
     return query("SELECT * FROM master WHERE nat ILIKE '%KSA%' OR Country ILIKE '%KSA%'")
 
 
