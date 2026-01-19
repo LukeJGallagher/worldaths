@@ -1332,23 +1332,26 @@ with tab6:
 
         with col2:
             st.subheader("Finals at Major Games")
-            finals_data = analytics.major_games.get_finals_appearances()
+            try:
+                finals_data = analytics.major_games.get_finals_appearances()
 
-            if 'by_athlete' in finals_data:
-                st.metric("Total Finals Appearances", finals_data.get('total_finals', 0))
+                if 'by_athlete' in finals_data:
+                    st.metric("Total Finals Appearances", finals_data.get('total_finals', 0))
 
-                for athlete, data in list(finals_data.get('by_athlete', {}).items())[:5]:
-                    games = list(set(data.get('game_category', [])))
-                    events = list(set(data.get('event_name', [])))
-                    st.markdown(f"""
-                    <div style="background: rgba(0, 113, 103, 0.2); border-radius: 8px; padding: 0.8rem; margin: 0.5rem 0;">
-                        <strong style="color: white;">{athlete}</strong><br>
-                        <span style="color: {TEAL_LIGHT}; font-size: 0.85rem;">{', '.join(games)}</span><br>
-                        <span style="color: #aaa; font-size: 0.8rem;">{', '.join(events)}</span>
-                    </div>
-                    """, unsafe_allow_html=True)
-            else:
-                st.info(finals_data.get('message', 'No finals data available'))
+                    for athlete, data in list(finals_data.get('by_athlete', {}).items())[:5]:
+                        games = list(set(data.get('game_category', [])))
+                        events = list(set(data.get('event_name', [])))
+                        st.markdown(f"""
+                        <div style="background: rgba(0, 113, 103, 0.2); border-radius: 8px; padding: 0.8rem; margin: 0.5rem 0;">
+                            <strong style="color: white;">{athlete}</strong><br>
+                            <span style="color: {TEAL_LIGHT}; font-size: 0.85rem;">{', '.join(games)}</span><br>
+                            <span style="color: #aaa; font-size: 0.8rem;">{', '.join(events)}</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+                else:
+                    st.info(finals_data.get('message', 'No finals data available'))
+            except Exception as e:
+                st.info(f"Finals data unavailable: {str(e)[:100]}")
 
         # Discipline Knowledge Section
         st.markdown("---")
