@@ -1391,18 +1391,35 @@ with tab6:
         st.markdown("---")
         st.subheader("Individual Athlete Analysis")
 
-        # Get list of athletes from database
-        profiles_db = os.path.join(SQL_DIR, 'ksa_athlete_profiles.db')
-        if os.path.exists(profiles_db):
-            conn = sqlite3.connect(profiles_db)
-            athletes_df = pd.read_sql("SELECT full_name, primary_event FROM ksa_athletes WHERE primary_event IS NOT NULL ORDER BY full_name", conn)
-            conn.close()
+        # Get list of athletes from Azure or local database
+        athletes_for_analysis = None
 
-            if not athletes_df.empty:
-                athlete_options = athletes_df['full_name'].tolist()
-                selected_athlete = st.selectbox("Select Athlete", athlete_options, key="athlete_analysis_select")
+        # Try Azure first
+        if DATA_CONNECTOR_AVAILABLE:
+            try:
+                ksa_profiles = get_ksa_athletes()
+                if ksa_profiles is not None and not ksa_profiles.empty:
+                    if 'full_name' in ksa_profiles.columns:
+                        athletes_for_analysis = ksa_profiles[['full_name']].dropna()
+                        if 'primary_event' in ksa_profiles.columns:
+                            athletes_for_analysis = ksa_profiles[ksa_profiles['primary_event'].notna()][['full_name', 'primary_event']]
+            except Exception as e:
+                st.caption(f"Azure load: {str(e)[:50]}")
 
-                if selected_athlete:
+        # Fall back to local SQLite
+        if athletes_for_analysis is None or athletes_for_analysis.empty:
+            profiles_db = os.path.join(SQL_DIR, 'ksa_athlete_profiles.db')
+            if os.path.exists(profiles_db):
+                conn = sqlite3.connect(profiles_db)
+                athletes_for_analysis = pd.read_sql("SELECT full_name, primary_event FROM ksa_athletes WHERE primary_event IS NOT NULL ORDER BY full_name", conn)
+                conn.close()
+
+        if athletes_for_analysis is not None and not athletes_for_analysis.empty:
+            athlete_options = sorted(athletes_for_analysis['full_name'].unique().tolist())
+            selected_athlete = st.selectbox("Select Athlete", athlete_options, key="athlete_analysis_select")
+
+            if selected_athlete:
+                try:
                     athlete_analysis = analytics.major_games.analyze_athlete_major_games(selected_athlete)
 
                     if 'error' not in athlete_analysis:
@@ -1413,7 +1430,7 @@ with tab6:
                         if athlete_analysis.get('highlights'):
                             st.markdown("**Highlights (Top 8 Finishes):**")
                             for highlight in athlete_analysis['highlights']:
-                                st.markdown(f"- 🏅 **{highlight['place']}th place** at {highlight['game']} ({highlight['event']})")
+                                st.markdown(f"- **{highlight['place']}th place** at {highlight['game']} ({highlight['event']})")
 
                         # Breakdown by game type
                         if athlete_analysis.get('by_game_type'):
@@ -1423,11 +1440,11 @@ with tab6:
                                     for result in game_data.get('results', [])[:10]:
                                         st.markdown(f"- {result.get('event_name', 'N/A')}: {result.get('result_value', 'N/A')} (Place: {result.get('place', 'N/A')})")
                     else:
-                        st.warning(athlete_analysis.get('error', 'No data available'))
-            else:
-                st.info("No athletes with primary events found in database")
+                        st.info(athlete_analysis.get('error', 'No major games data for this athlete'))
+                except Exception as e:
+                    st.info(f"Could not analyze athlete: {str(e)[:100]}")
         else:
-            st.warning("Athlete profiles database not found")
+            st.info("No athlete profiles available. Data may still be loading from Azure.")
 
     else:
         if 'error' in major_summary:
