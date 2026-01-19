@@ -73,7 +73,14 @@ class WhatItTakesToWin:
         # Try Azure parquet first (master.parquet has 2.3M records)
         if DATA_CONNECTOR_AVAILABLE:
             try:
-                df = get_rankings_data()
+                # Import the direct download function
+                from data_connector import _download_parquet_from_azure, get_data_mode
+
+                if get_data_mode() == "azure":
+                    df = _download_parquet_from_azure("master.parquet")
+                else:
+                    df = get_rankings_data()
+
                 if df is not None and not df.empty:
                     # Normalize column names to match expected format
                     column_map = {
@@ -96,6 +103,8 @@ class WhatItTakesToWin:
                     return self.data
             except Exception as e:
                 print(f"Warning: Could not load Azure data: {e}")
+                import traceback
+                traceback.print_exc()
 
         # Fall back to local CSV files
         db_cleaned_path = os.path.join(self.data_dir, 'db_cleaned.csv')
