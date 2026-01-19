@@ -1557,9 +1557,7 @@ with tab7:
                            'Final Standard (8th)', 'Top 8 Average', 'Sample Size']
 
             st.dataframe(
-                filtered_report[display_cols].style.background_gradient(
-                    subset=['Sample Size'], cmap='Greens'
-                ),
+                filtered_report[display_cols],
                 use_container_width=True,
                 hide_index=True
             )
