@@ -1151,7 +1151,14 @@ with tab4:
 # Tab 5: World Championships Qualification
 ###################################
 with tab5:
-    st.header('World Championships Qualification')
+    st.markdown(f"""
+    <div style="background: linear-gradient(135deg, {TEAL_PRIMARY} 0%, {TEAL_DARK} 100%); padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
+        <h2 style="color: white; margin: 0;">World Championships Qualification Analysis</h2>
+        <p style="color: rgba(255,255,255,0.9); margin: 0.5rem 0 0 0;">
+            Tokyo 2025 - Comprehensive analysis of qualification routes, entry standards, and ranking positions
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
 
     # Show data source indicator
     mode = get_data_mode() if DATA_CONNECTOR_AVAILABLE else 'local'
@@ -1161,87 +1168,227 @@ with tab5:
     qual_standards_df = get_qual_standards_df()
 
     if road_to_df is not None and not road_to_df.empty:
-        # Get KSA athlete names for matching
-        ksa_names = []
-        if athletes_df is not None and not athletes_df.empty:
-            if 'full_name' in athletes_df.columns:
-                ksa_names = athletes_df['full_name'].tolist()
+        # Filter to only qualified athletes (exclude "All_Status" which is summary rows)
+        qualified_df = road_to_df[road_to_df['Qualification_Status'] != 'All_Status'].copy()
 
-        # Find KSA athletes in qualification data (Status column contains athlete names)
-        ksa_qualified = pd.DataFrame()
-        if ksa_names and 'Status' in road_to_df.columns:
-            ksa_qualified = road_to_df[road_to_df['Status'].isin(ksa_names)]
+        # === QUALIFICATION OVERVIEW ===
+        st.subheader("Qualification Routes Overview")
 
-        # KSA Athletes Section
-        st.subheader(f"KSA Athletes ({len(ksa_qualified)} entries)")
+        # Count by qualification method
+        qual_counts = qualified_df['Qualification_Status'].value_counts()
 
-        if not ksa_qualified.empty:
-            st.success(f"Found {len(ksa_qualified)} KSA athlete entries in qualification data")
+        col1, col2, col3, col4 = st.columns(4)
 
-            # Status column contains the actual athlete names
-            # Create display dataframe with only needed columns
-            ksa_display = ksa_qualified[['Actual_Event_Name', 'Status', 'Qualification_Status', 'Details']].copy()
-            ksa_display.columns = ['Event', 'Athlete', 'Status', 'Details']
+        with col1:
+            entry_std = qual_counts.get('Qualified_by_Entry_Standard', 0)
+            st.markdown(f"""
+            <div style="background: {TEAL_PRIMARY}; padding: 1rem; border-radius: 8px; text-align: center;">
+                <p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 0.85rem;">By Entry Standard</p>
+                <p style="color: white; font-size: 1.8rem; font-weight: bold; margin: 0.25rem 0;">{entry_std:,}</p>
+            </div>
+            """, unsafe_allow_html=True)
 
-            st.dataframe(ksa_display.drop_duplicates(), use_container_width=True, hide_index=True)
-        else:
-            st.info("No KSA athletes found in current qualification data")
+        with col2:
+            by_ranking = qual_counts.get('In_World_Rankings_quota', 0)
+            st.markdown(f"""
+            <div style="background: {GOLD_ACCENT}; padding: 1rem; border-radius: 8px; text-align: center;">
+                <p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 0.85rem;">By World Ranking</p>
+                <p style="color: white; font-size: 1.8rem; font-weight: bold; margin: 0.25rem 0;">{by_ranking:,}</p>
+            </div>
+            """, unsafe_allow_html=True)
 
-        # Global Data Section
+        with col3:
+            wild_card = qual_counts.get('Qualified_by_Wild_Card', 0)
+            st.markdown(f"""
+            <div style="background: #C0C0C0; padding: 1rem; border-radius: 8px; text-align: center;">
+                <p style="color: #333; margin: 0; font-size: 0.85rem;">Wild Cards</p>
+                <p style="color: #333; font-size: 1.8rem; font-weight: bold; margin: 0.25rem 0;">{wild_card:,}</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with col4:
+            next_best = qual_counts.get('Next_best_by_World_Rankings', 0)
+            st.markdown(f"""
+            <div style="background: {GRAY_BLUE}; padding: 1rem; border-radius: 8px; text-align: center;">
+                <p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 0.85rem;">Next Best (Reserve)</p>
+                <p style="color: white; font-size: 1.8rem; font-weight: bold; margin: 0.25rem 0;">{next_best:,}</p>
+            </div>
+            """, unsafe_allow_html=True)
+
         st.markdown("---")
-        st.subheader("All Athletes Qualification Status")
-        st.caption(f"Total: {len(road_to_df):,} records from {mode} data source")
 
-        # Filters
+        # === KSA ATHLETES SECTION ===
+        st.subheader("KSA Athletes Qualification Status")
+
+        # Find KSA athletes (Athlete column has country code)
+        ksa_in_data = qualified_df[qualified_df['Athlete'] == 'KSA'].copy()
+
+        if not ksa_in_data.empty:
+            # Group by qualification status
+            ksa_qualified_athletes = ksa_in_data[ksa_in_data['Qualification_Status'].isin(['Qualified_by_Entry_Standard', 'In_World_Rankings_quota', 'Qualified_by_Wild_Card'])]
+            ksa_reserve = ksa_in_data[ksa_in_data['Qualification_Status'] == 'Next_best_by_World_Rankings']
+
+            if not ksa_qualified_athletes.empty:
+                st.success(f"**{len(ksa_qualified_athletes)} KSA athletes qualified for Tokyo 2025!**")
+
+                ksa_display = ksa_qualified_athletes[['Actual_Event_Name', 'Status', 'QP', 'Qualification_Status', 'Details']].copy()
+                ksa_display.columns = ['Event', 'Athlete', 'Qual Position', 'Route', 'Performance']
+                ksa_display['Route'] = ksa_display['Route'].str.replace('_', ' ').str.replace('Qualified by ', '').str.replace('In World Rankings quota', 'World Ranking')
+
+                st.dataframe(ksa_display.drop_duplicates(), use_container_width=True, hide_index=True)
+            else:
+                st.warning("No KSA athletes currently in qualified positions")
+
+            if not ksa_reserve.empty:
+                st.info(f"**{len(ksa_reserve)} KSA athletes in reserve positions** (may qualify if others withdraw)")
+
+                reserve_display = ksa_reserve[['Actual_Event_Name', 'Status', 'QP', 'Details']].copy()
+                reserve_display.columns = ['Event', 'Athlete', 'Reserve Position', 'Current Mark']
+                st.dataframe(reserve_display.drop_duplicates().head(20), use_container_width=True, hide_index=True)
+        else:
+            st.info("Search for KSA athletes in the event analysis below")
+
+        st.markdown("---")
+
+        # === EVENT-SPECIFIC ANALYSIS ===
+        st.subheader("Event-by-Event Qualification Analysis")
+
         col1, col2 = st.columns(2)
 
-        selected_event_rt = "All Events"
-        selected_status = "All"
-
         with col1:
-            if 'Actual_Event_Name' in road_to_df.columns:
-                events_rt = sorted(road_to_df['Actual_Event_Name'].dropna().unique())
-                selected_event_rt = st.selectbox("Select Event", ["All Events"] + list(events_rt), key="road_to_event")
+            events_list = sorted(qualified_df['Actual_Event_Name'].dropna().unique())
+            selected_event_qual = st.selectbox("Select Event", events_list, key="qual_event_select")
 
         with col2:
-            if 'Qualification_Status' in road_to_df.columns:
-                statuses = sorted(road_to_df['Qualification_Status'].dropna().unique())
-                selected_status = st.selectbox("Qualification Status", ["All"] + list(statuses), key="qual_status")
+            qual_routes = ['All Routes', 'Qualified_by_Entry_Standard', 'In_World_Rankings_quota', 'Qualified_by_Wild_Card', 'Next_best_by_World_Rankings']
+            selected_route = st.selectbox("Qualification Route", qual_routes, key="qual_route_select")
 
-        # Filter data
-        filtered_rt = road_to_df.copy()
-        if selected_event_rt != "All Events":
-            filtered_rt = filtered_rt[filtered_rt['Actual_Event_Name'] == selected_event_rt]
-        if selected_status != "All":
-            filtered_rt = filtered_rt[filtered_rt['Qualification_Status'] == selected_status]
+        # Filter to selected event
+        event_data = qualified_df[qualified_df['Actual_Event_Name'] == selected_event_qual].copy()
 
-        # Metrics
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Total Entries", len(filtered_rt))
-        with col2:
-            qualified = len(filtered_rt[filtered_rt['Qualification_Status'].str.contains('Qualified', na=False)]) if 'Qualification_Status' in filtered_rt.columns else 0
-            st.metric("Qualified", qualified)
-        with col3:
-            events_count = filtered_rt['Actual_Event_Name'].nunique() if 'Actual_Event_Name' in filtered_rt.columns else 0
-            st.metric("Events", events_count)
+        if selected_route != 'All Routes':
+            event_data = event_data[event_data['Qualification_Status'] == selected_route]
 
-        # Create display dataframe with only needed columns (Status contains athlete names)
-        display_cols_src = ['Actual_Event_Name', 'Status', 'Qualification_Status', 'Details']
-        display_cols_src = [c for c in display_cols_src if c in filtered_rt.columns]
-        filtered_display = filtered_rt[display_cols_src].copy()
-        # Rename columns for clarity
-        col_rename = {'Actual_Event_Name': 'Event', 'Status': 'Athlete', 'Qualification_Status': 'Status'}
-        filtered_display = filtered_display.rename(columns=col_rename)
+        if not event_data.empty:
+            # Show key insights for this event
+            st.markdown(f"### {selected_event_qual}")
 
-        st.dataframe(filtered_display.drop_duplicates().head(500), use_container_width=True, hide_index=True)
+            # Count by route for this event
+            event_routes = event_data['Qualification_Status'].value_counts()
+
+            insight_cols = st.columns(4)
+            with insight_cols[0]:
+                std_count = event_routes.get('Qualified_by_Entry_Standard', 0)
+                st.metric("By Standard", std_count)
+            with insight_cols[1]:
+                rank_count = event_routes.get('In_World_Rankings_quota', 0)
+                st.metric("By Ranking", rank_count)
+            with insight_cols[2]:
+                wc_count = event_routes.get('Qualified_by_Wild_Card', 0)
+                st.metric("Wild Cards", wc_count)
+            with insight_cols[3]:
+                total_qual = std_count + rank_count + wc_count
+                st.metric("Total Qualified", total_qual)
+
+            # Extract performance marks from Details column
+            def extract_mark(detail):
+                if pd.isna(detail):
+                    return None
+                # Look for time pattern (e.g., "10.72") or distance (e.g., "8.50")
+                import re
+                match = re.search(r'^([\d.:]+)', str(detail))
+                if match:
+                    return match.group(1)
+                return None
+
+            event_data['Mark'] = event_data['Details'].apply(extract_mark)
+
+            # Show the qualified athletes for this event
+            if selected_route == 'All Routes':
+                # Show by category
+                for route in ['Qualified_by_Entry_Standard', 'In_World_Rankings_quota', 'Qualified_by_Wild_Card']:
+                    route_data = event_data[event_data['Qualification_Status'] == route]
+                    if not route_data.empty:
+                        route_name = route.replace('_', ' ').replace('Qualified by ', '').replace('In World Rankings quota', 'By World Ranking')
+                        with st.expander(f"{route_name} ({len(route_data)} athletes)", expanded=(route == 'Qualified_by_Entry_Standard')):
+                            display = route_data[['QP', 'Status', 'Athlete', 'Mark', 'Details']].copy()
+                            display.columns = ['Pos', 'Athlete Name', 'Country', 'Mark', 'Details']
+                            display = display.sort_values('Pos')
+                            st.dataframe(display.drop_duplicates().head(50), use_container_width=True, hide_index=True)
+            else:
+                # Show filtered data
+                display = event_data[['QP', 'Status', 'Athlete', 'Mark', 'Details']].copy()
+                display.columns = ['Pos', 'Athlete Name', 'Country', 'Mark', 'Details']
+                display = display.sort_values('Pos')
+                st.dataframe(display.drop_duplicates().head(100), use_container_width=True, hide_index=True)
+
+            # Show "last qualifier" analysis
+            entry_std_athletes = event_data[event_data['Qualification_Status'] == 'Qualified_by_Entry_Standard']
+            if not entry_std_athletes.empty and 'QP' in entry_std_athletes.columns:
+                last_by_std = entry_std_athletes.nlargest(1, 'QP')
+                if not last_by_std.empty:
+                    last_mark = last_by_std.iloc[0]['Mark'] if 'Mark' in last_by_std.columns else 'N/A'
+                    last_name = last_by_std.iloc[0]['Status']
+                    st.info(f"**Last qualifier by entry standard:** {last_name} - {last_mark}")
+
+            # Show first non-qualifier (what was needed but missed)
+            reserve = event_data[event_data['Qualification_Status'] == 'Next_best_by_World_Rankings']
+            if not reserve.empty and 'QP' in reserve.columns:
+                first_reserve = reserve.nsmallest(1, 'QP')
+                if not first_reserve.empty:
+                    reserve_mark = first_reserve.iloc[0]['Mark'] if 'Mark' in first_reserve.columns else 'N/A'
+                    reserve_name = first_reserve.iloc[0]['Status']
+                    st.caption(f"First reserve: {reserve_name} ({first_reserve.iloc[0]['Athlete']}) - {reserve_mark}")
+
+        st.markdown("---")
+
+        # === COUNTRY ANALYSIS ===
+        st.subheader("Qualification by Country")
+
+        # Count qualified athletes by country
+        actual_qualified = qualified_df[qualified_df['Qualification_Status'].isin(['Qualified_by_Entry_Standard', 'In_World_Rankings_quota', 'Qualified_by_Wild_Card'])]
+        country_counts = actual_qualified.groupby('Athlete').size().sort_values(ascending=False).head(20)
+
+        if not country_counts.empty:
+            # Create bar chart
+            fig = go.Figure(data=[
+                go.Bar(
+                    x=country_counts.index,
+                    y=country_counts.values,
+                    marker_color=TEAL_PRIMARY,
+                    text=country_counts.values,
+                    textposition='outside'
+                )
+            ])
+            fig.update_layout(
+                title="Top 20 Countries by Qualified Athletes",
+                xaxis_title="Country",
+                yaxis_title="Qualified Athletes",
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+                font=dict(color='white'),
+                height=400
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Show KSA position
+            if 'KSA' in country_counts.index:
+                ksa_rank = list(country_counts.index).index('KSA') + 1
+                ksa_count = country_counts['KSA']
+                st.success(f"**KSA: Ranked #{ksa_rank} with {ksa_count} qualified athletes**")
+            else:
+                ksa_total = len(actual_qualified[actual_qualified['Athlete'] == 'KSA'])
+                if ksa_total > 0:
+                    st.info(f"KSA has {ksa_total} qualified athletes")
 
     else:
         st.warning("No qualification data found. Data may still be loading from Azure.")
 
     # Show qualification standards (from benchmarks parquet)
     if qual_standards_df is not None and not qual_standards_df.empty:
-        st.subheader("Performance Standards")
+        st.markdown("---")
+        st.subheader("Championship Performance Standards")
+        st.caption("Historical medal and final standards based on championship data")
 
         # Check which columns exist (benchmarks parquet has different structure)
         if 'Event' in qual_standards_df.columns and 'Gold Standard' in qual_standards_df.columns:
