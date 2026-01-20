@@ -715,5 +715,5 @@ def get_performance_trend(
         'first_result': results[0],
         'last_result': results[-1],
         'change': round(results[-1] - results[0], 3),
-        'change_percent': round((results[-1] - results[0]) / results[0] * 100, 2)
+        'change_percent': round((results[-1] - results[0]) / results[0] * 100, 2) if results[0] != 0 else 0
     }
