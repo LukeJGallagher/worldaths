@@ -287,20 +287,26 @@ def calculate_consistency_score(
     else:
         rating = "Inconsistent"
 
+    std_dev = round(std_val, 3)
+    interpretation = rating
+    color = STATUS_COLORS.get(
+        'excellent' if score >= 95 else
+        'good' if score >= 85 else
+        'warning' if score >= 70 else 'danger'
+    )
+
     return {
         'score': round(score, 1),
         'cv': round(cv, 4),
         'mean': round(mean_val, 2),
-        'std': round(std_val, 3),
+        'std_dev': std_dev,  # spec name
+        'std': std_dev,      # alias
         'count': len(valid_performances),
         'best': min(valid_performances) if not is_field else max(valid_performances),
         'worst': max(valid_performances) if not is_field else min(valid_performances),
-        'rating': rating,
-        'color': STATUS_COLORS.get(
-            'excellent' if score >= 95 else
-            'good' if score >= 85 else
-            'warning' if score >= 70 else 'danger'
-        )
+        'interpretation': interpretation,  # spec name
+        'rating': interpretation,  # alias
+        'color': color
     }
 
 
@@ -372,9 +378,12 @@ def calculate_near_miss(
         status = "Work Needed"
         color = GRAY_BLUE
 
+    gap_percent_val = round(gap_percent * 100, 2)
+
     return {
         'gap': round(abs(gap), 3),
-        'gap_percent': round(gap_percent * 100, 2),
+        'gap_percent': gap_percent_val,
+        'percentage': gap_percent_val,  # alias for gap_percent
         'qualified': qualified,
         'is_near_miss': is_near_miss,
         'status': status,
@@ -521,6 +530,7 @@ def get_regional_rivals() -> List[str]:
         'LBN',  # Lebanon
         'SYR',  # Syria
         'PLE',  # Palestine
+        'IRN',  # Iran
     ]
 
 
@@ -530,7 +540,7 @@ def country_comparison(
     event: str,
     top_n: int = 5,
     year: Optional[int] = None
-) -> Dict:
+) -> pd.DataFrame:
     """
     Compare country performance in a specific event.
 
@@ -538,18 +548,20 @@ def country_comparison(
         df: DataFrame with columns ['nat', 'event', 'result', 'date']
         countries: List of country codes to compare
         event: Event name to filter
-        top_n: Number of top athletes per country to consider
+        top_n: Number of top athletes per country to consider (unused, kept for compatibility)
         year: Optional year filter (filters by date column)
 
     Returns:
-        Dictionary with:
-        - rankings: List of countries sorted by best performance
-        - country_stats: Dict of stats per country
-        - event: Event name
-        - is_field: Whether event is field event
+        DataFrame with columns:
+        - Country: Country code
+        - Athletes: Number of unique athletes
+        - Top 1: Best performance (formatted)
+        - Top 3 Avg: Average of top 3 performances (formatted)
+        - Top 5 Avg: Average of top 5 performances (formatted)
+        - Depth (Top 10): Number of athletes in top 10 performances
 
     Example:
-        >>> country_comparison(df, ['KSA', 'QAT', 'BRN'], '100m', top_n=3)
+        >>> country_comparison(df, ['KSA', 'QAT', 'BRN'], '100m')
     """
     is_field = is_field_event(event)
 
@@ -569,29 +581,27 @@ def country_comparison(
     )
     event_df = event_df.dropna(subset=['result_numeric'])
 
-    country_stats = {}
+    rows = []
 
     for country in countries:
         country_df = event_df[event_df['nat'] == country]
 
         if country_df.empty:
-            country_stats[country] = {
-                'best': None,
-                'athletes': 0,
-                'top_performers': [],
-                'avg_top_n': None
-            }
+            rows.append({
+                'Country': country,
+                'Athletes': 0,
+                'Top 1': '-',
+                'Top 3 Avg': '-',
+                'Top 5 Avg': '-',
+                'Depth (Top 10)': 0
+            })
             continue
 
-        # Get best result
+        # Sort by performance (best first)
         if is_field:
-            best_idx = country_df['result_numeric'].idxmax()
-            sorted_df = country_df.nlargest(top_n, 'result_numeric')
+            sorted_df = country_df.nlargest(10, 'result_numeric')
         else:
-            best_idx = country_df['result_numeric'].idxmin()
-            sorted_df = country_df.nsmallest(top_n, 'result_numeric')
-
-        best_result = country_df.loc[best_idx, 'result_numeric']
+            sorted_df = country_df.nsmallest(10, 'result_numeric')
 
         # Get unique athletes count
         athlete_col = 'competitor' if 'competitor' in country_df.columns else 'athlete'
@@ -600,42 +610,53 @@ def country_comparison(
         else:
             unique_athletes = len(country_df)
 
-        # Top performers
-        top_performers = []
-        for _, row in sorted_df.head(top_n).iterrows():
-            top_performers.append({
-                'name': row.get('competitor', row.get('athlete', 'Unknown')),
-                'result': format_result(row['result_numeric'], event),
-                'result_numeric': row['result_numeric']
-            })
+        # Get results for averages
+        all_results = sorted_df['result_numeric'].tolist()
 
-        # Average of top N
-        top_results = sorted_df['result_numeric'].head(top_n).tolist()
-        avg_top_n = np.mean(top_results) if top_results else None
+        # Top 1 (best)
+        top_1 = format_result(all_results[0], event) if len(all_results) >= 1 else '-'
 
-        country_stats[country] = {
-            'best': best_result,
-            'best_formatted': format_result(best_result, event),
-            'athletes': unique_athletes,
-            'performances': len(country_df),
-            'top_performers': top_performers,
-            'avg_top_n': round(avg_top_n, 3) if avg_top_n else None
-        }
+        # Top 3 average
+        if len(all_results) >= 3:
+            top_3_avg = np.mean(all_results[:3])
+            top_3_avg_fmt = format_result(top_3_avg, event)
+        else:
+            top_3_avg_fmt = '-'
 
-    # Rank countries by best performance
-    ranked_countries = sorted(
-        [c for c in countries if country_stats[c]['best'] is not None],
-        key=lambda c: country_stats[c]['best'],
-        reverse=is_field  # Higher is better for field events
-    )
+        # Top 5 average
+        if len(all_results) >= 5:
+            top_5_avg = np.mean(all_results[:5])
+            top_5_avg_fmt = format_result(top_5_avg, event)
+        else:
+            top_5_avg_fmt = '-'
 
-    return {
-        'rankings': ranked_countries,
-        'country_stats': country_stats,
-        'event': event,
-        'is_field': is_field,
-        'top_n': top_n
-    }
+        # Depth (Top 10) - number of athletes with performances in top 10
+        depth_top_10 = min(len(all_results), 10)
+
+        rows.append({
+            'Country': country,
+            'Athletes': unique_athletes,
+            'Top 1': top_1,
+            'Top 3 Avg': top_3_avg_fmt,
+            'Top 5 Avg': top_5_avg_fmt,
+            'Depth (Top 10)': depth_top_10
+        })
+
+    # Create DataFrame and sort by best performance
+    result_df = pd.DataFrame(rows)
+
+    # Sort by Top 1 performance (need to parse back to numeric for sorting)
+    def parse_for_sort(val):
+        if val == '-':
+            return float('inf') if not is_field else float('-inf')
+        parsed = parse_result_to_seconds(val, event)
+        return parsed if parsed is not None else (float('inf') if not is_field else float('-inf'))
+
+    result_df['_sort_key'] = result_df['Top 1'].apply(parse_for_sort)
+    result_df = result_df.sort_values('_sort_key', ascending=not is_field)
+    result_df = result_df.drop(columns=['_sort_key']).reset_index(drop=True)
+
+    return result_df
 
 
 # =============================================================================
