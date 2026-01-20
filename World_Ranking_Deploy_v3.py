@@ -1369,6 +1369,149 @@ with tab4:
 
         saudi_combined = saudi_combined.drop_duplicates()
         st.dataframe(saudi_combined.reset_index(drop=True), use_container_width=True)
+
+        # === REGIONAL COMPARISON ===
+        st.markdown("---")
+        st.subheader("Regional Comparison - KSA vs Gulf & Middle East")
+
+        if DATA_CONNECTOR_AVAILABLE:
+            try:
+                # Get full rankings data
+                full_rankings = get_rankings_data()
+
+                if full_rankings is not None and not full_rankings.empty:
+                    rival_countries = ['KSA', 'BRN', 'QAT', 'UAE', 'KUW', 'OMA', 'IRN', 'JOR']
+
+                    # Event selector
+                    event_col_comp = 'event' if 'event' in full_rankings.columns else 'Event Type'
+                    events_available = sorted(full_rankings[event_col_comp].dropna().unique())
+
+                    comp_col1, comp_col2 = st.columns([2, 1])
+                    with comp_col1:
+                        selected_event_comp = st.selectbox(
+                            "Select Event for Comparison",
+                            events_available,
+                            key="country_comp_event"
+                        )
+                    with comp_col2:
+                        selected_gender_comp = st.selectbox(
+                            "Gender",
+                            ['Men', 'Women'],
+                            key="country_comp_gender"
+                        )
+
+                    # Filter by gender if column exists
+                    filtered_df = full_rankings.copy()
+                    if 'gender' in filtered_df.columns:
+                        filtered_df = filtered_df[filtered_df['gender'].str.lower() == selected_gender_comp.lower()]
+
+                    # Filter to event and rival countries
+                    nat_col = 'nat' if 'nat' in filtered_df.columns else 'Country'
+                    event_df = filtered_df[(filtered_df[event_col_comp] == selected_event_comp) &
+                                          (filtered_df[nat_col].isin(rival_countries))]
+
+                    if not event_df.empty:
+                        # Parse results
+                        result_col = 'result' if 'result' in event_df.columns else 'Score'
+
+                        def parse_for_comparison(val):
+                            if pd.isna(val):
+                                return None
+                            val_str = str(val).strip()
+                            try:
+                                if ':' in val_str:
+                                    parts = val_str.split(':')
+                                    return float(parts[0]) * 60 + float(parts[1])
+                                return float(val_str)
+                            except:
+                                return None
+
+                        event_df = event_df.copy()
+                        event_df['result_numeric'] = event_df[result_col].apply(parse_for_comparison)
+                        event_df = event_df.dropna(subset=['result_numeric'])
+
+                        # Determine if field event
+                        is_field = any(kw in selected_event_comp.lower() for kw in ['jump', 'vault', 'put', 'throw', 'discus', 'javelin', 'hammer'])
+
+                        # Calculate country stats
+                        competitor_col = 'competitor' if 'competitor' in event_df.columns else 'Name'
+                        country_stats = []
+                        for country in rival_countries:
+                            country_df = event_df[event_df[nat_col] == country]
+                            if country_df.empty:
+                                continue
+
+                            # Get best per athlete
+                            if is_field:
+                                best_by_athlete = country_df.groupby(competitor_col)['result_numeric'].max()
+                                top_perf = best_by_athlete.max()
+                                top_3_avg = best_by_athlete.nlargest(3).mean() if len(best_by_athlete) >= 3 else best_by_athlete.mean()
+                            else:
+                                best_by_athlete = country_df.groupby(competitor_col)['result_numeric'].min()
+                                top_perf = best_by_athlete.min()
+                                top_3_avg = best_by_athlete.nsmallest(3).mean() if len(best_by_athlete) >= 3 else best_by_athlete.mean()
+
+                            country_stats.append({
+                                'Country': country,
+                                'Athletes': len(best_by_athlete),
+                                'Top 1': round(top_perf, 2),
+                                'Top 3 Avg': round(top_3_avg, 2)
+                            })
+
+                        if country_stats:
+                            comparison_df = pd.DataFrame(country_stats)
+                            comparison_df = comparison_df.sort_values('Top 1', ascending=not is_field)
+
+                            # Display table with KSA highlighted
+                            st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+
+                            # Visual comparison chart
+                            fig_comp = go.Figure()
+
+                            colors = [TEAL_PRIMARY if c == 'KSA' else GRAY_BLUE for c in comparison_df['Country']]
+
+                            fig_comp.add_trace(go.Bar(
+                                x=comparison_df['Country'],
+                                y=comparison_df['Top 1'],
+                                name='Best Performance',
+                                marker_color=colors,
+                                text=comparison_df['Top 1'],
+                                textposition='outside'
+                            ))
+
+                            fig_comp.update_layout(
+                                title=f"{selected_event_comp} - Regional Best Performances ({selected_gender_comp})",
+                                xaxis_title="Country",
+                                yaxis_title="Performance",
+                                yaxis=dict(autorange='reversed') if not is_field else dict(),
+                                plot_bgcolor='rgba(0,0,0,0)',
+                                paper_bgcolor='rgba(0,0,0,0)',
+                                font=dict(color='white'),
+                                height=400
+                            )
+                            fig_comp.update_xaxes(showgrid=False)
+                            fig_comp.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.2)')
+
+                            st.plotly_chart(fig_comp, use_container_width=True)
+
+                            # KSA position insight
+                            ksa_row = comparison_df[comparison_df['Country'] == 'KSA']
+                            if not ksa_row.empty:
+                                ksa_rank = comparison_df.index.get_loc(ksa_row.index[0]) + 1
+                                total_countries = len(comparison_df)
+                                if ksa_rank == 1:
+                                    st.success(f"KSA leads the region in {selected_event_comp}!")
+                                elif ksa_rank <= 3:
+                                    st.info(f"KSA ranks #{ksa_rank} of {total_countries} regional rivals in {selected_event_comp}")
+                                else:
+                                    st.warning(f"KSA ranks #{ksa_rank} of {total_countries} - opportunity for improvement in {selected_event_comp}")
+                        else:
+                            st.info(f"No data available for regional comparison in {selected_event_comp}")
+                    else:
+                        st.info(f"No data for {selected_event_comp} among regional rivals")
+            except Exception as e:
+                st.warning(f"Country comparison unavailable: {str(e)[:100]}")
+
     else:
         st.warning("No Saudi athletes found in rankings. Data may still be loading from Azure.")
 
