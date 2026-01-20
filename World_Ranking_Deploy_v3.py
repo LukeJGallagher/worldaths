@@ -1836,9 +1836,11 @@ with tab7:
 
             filtered_report = report[report['Event'].isin(filtered_events)]
 
-            # Display styled table
+            # Display styled table with Top 20 Average
             display_cols = ['Event', 'Gold Standard', 'Silver Standard', 'Bronze Standard',
-                           'Final Standard (8th)', 'Top 8 Average', 'Sample Size']
+                           'Final Standard (8th)', 'Top 8 Average', 'Top 20 Average', 'Sample Size']
+            # Only include columns that exist
+            display_cols = [c for c in display_cols if c in filtered_report.columns]
 
             st.dataframe(
                 filtered_report[display_cols],
@@ -1903,6 +1905,108 @@ with tab7:
                             </p>
                         </div>
                         """, unsafe_allow_html=True)
+
+                    # === FINALS PERFORMANCE PROGRESSION CHART (1st-8th over time) ===
+                    st.markdown("---")
+                    st.subheader("Finals Performance Progression (1st-8th)")
+                    st.markdown(f"<p style='color: #aaa;'>How performances have evolved across championships for positions 1-8</p>", unsafe_allow_html=True)
+
+                    # Get year-by-year progression data for positions 1-8
+                    event_col = 'Event' if 'Event' in wittw.data.columns else 'event'
+                    gender_col = 'Gender' if 'Gender' in wittw.data.columns else 'gender'
+                    rank_col = 'Rank' if 'Rank' in wittw.data.columns else 'rank'
+                    mark_col = 'Mark' if 'Mark' in wittw.data.columns else ('result' if 'result' in wittw.data.columns else 'Result')
+
+                    prog_data = wittw.data.copy()
+                    prog_data = prog_data[prog_data[event_col].astype(str).str.contains(selected_event, case=False, na=False)]
+                    prog_data = prog_data[prog_data[gender_col].astype(str).str.lower().str.contains(wittw_gender.lower(), na=False)]
+
+                    # Parse marks
+                    is_field = wittw.is_field_event(selected_event)
+                    if is_field:
+                        prog_data['ParsedMark'] = prog_data[mark_col].apply(wittw.parse_distance_to_meters)
+                    else:
+                        prog_data['ParsedMark'] = prog_data[mark_col].apply(wittw.parse_time_to_seconds)
+
+                    prog_data = prog_data.dropna(subset=['ParsedMark'])
+
+                    if rank_col in prog_data.columns and 'year' in prog_data.columns:
+                        # Filter to top 8 positions
+                        prog_data = prog_data[prog_data[rank_col] <= 8]
+
+                        if not prog_data.empty:
+                            # Place labels
+                            place_labels = {1: '🥇 1st', 2: '🥈 2nd', 3: '🥉 3rd',
+                                           4: '4th', 5: '5th', 6: '6th', 7: '7th', 8: '8th'}
+                            prog_data['Place'] = prog_data[rank_col].map(place_labels)
+
+                            # Color scale
+                            place_colors = {
+                                '🥇 1st': '#FFD700', '🥈 2nd': '#C0C0C0', '🥉 3rd': '#CD7F32',
+                                '4th': '#4CAF50', '5th': '#2196F3', '6th': '#9C27B0',
+                                '7th': '#FF5722', '8th': '#607D8B'
+                            }
+
+                            # Create progression chart
+                            fig_prog = go.Figure()
+
+                            for place in ['🥇 1st', '🥈 2nd', '🥉 3rd', '4th', '5th', '6th', '7th', '8th']:
+                                place_data = prog_data[prog_data['Place'] == place].sort_values('year')
+                                if not place_data.empty:
+                                    fig_prog.add_trace(go.Scatter(
+                                        x=place_data['year'],
+                                        y=place_data['ParsedMark'],
+                                        mode='lines+markers',
+                                        name=place,
+                                        line=dict(color=place_colors.get(place, '#888'), width=2),
+                                        marker=dict(size=8),
+                                        hovertemplate=f"<b>{place}</b><br>Year: %{{x}}<br>Mark: %{{y:.2f}}<extra></extra>"
+                                    ))
+
+                            # Update layout
+                            fig_prog.update_layout(
+                                title=f"{selected_event} - Finals Performance Over Time",
+                                xaxis_title="Year",
+                                yaxis_title="Performance",
+                                yaxis=dict(autorange='reversed') if not is_field else dict(),
+                                plot_bgcolor='rgba(0,0,0,0)',
+                                paper_bgcolor='rgba(0,0,0,0)',
+                                font=dict(color='white'),
+                                height=450,
+                                legend=dict(
+                                    orientation="h",
+                                    yanchor="bottom",
+                                    y=1.02,
+                                    xanchor="center",
+                                    x=0.5
+                                ),
+                                hovermode='x unified'
+                            )
+                            fig_prog.update_xaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.2)')
+                            fig_prog.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.2)')
+
+                            st.plotly_chart(fig_prog, use_container_width=True)
+
+                            # Key insight - Gold trend
+                            gold_data = prog_data[prog_data['Place'] == '🥇 1st'].sort_values('year')
+                            if len(gold_data) >= 2:
+                                first_gold = gold_data.iloc[0]['ParsedMark']
+                                last_gold = gold_data.iloc[-1]['ParsedMark']
+                                first_year = gold_data.iloc[0]['year']
+                                last_year = gold_data.iloc[-1]['year']
+
+                                if is_field:
+                                    improvement = last_gold - first_gold
+                                    direction = "further/higher" if improvement > 0 else "shorter/lower"
+                                else:
+                                    improvement = first_gold - last_gold
+                                    direction = "faster" if improvement > 0 else "slower"
+
+                                st.info(f"**Gold Trend:** From **{wittw.format_mark(first_gold, selected_event)}** ({int(first_year)}) to **{wittw.format_mark(last_gold, selected_event)}** ({int(last_year)}) — **{abs(improvement):.2f} {direction}**")
+                        else:
+                            st.info("No progression data available - position data may not be available for all years")
+                    else:
+                        st.info("Progression chart requires rank and year columns in the data")
 
                     # Top Athletes Progression - Shows what it really takes to win
                     st.markdown("---")

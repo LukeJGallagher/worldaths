@@ -261,7 +261,7 @@ class WhatItTakesToWin:
 
         if self.data is None or len(self.data) == 0:
             return {'gold': None, 'silver': None, 'bronze': None, 'final_standard': None,
-                    'top_8_avg': None, 'is_field_event': False, 'sample_size': 0}
+                    'top_8_avg': None, 'top_20_avg': None, 'is_field_event': False, 'sample_size': 0}
 
         df = self.data.copy()
         is_field = self.is_field_event(event)
@@ -283,7 +283,7 @@ class WhatItTakesToWin:
 
         if len(df) == 0:
             return {'gold': None, 'silver': None, 'bronze': None, 'final_standard': None,
-                    'top_8_avg': None, 'is_field_event': is_field, 'sample_size': 0}
+                    'top_8_avg': None, 'top_20_avg': None, 'is_field_event': is_field, 'sample_size': 0}
 
         # Parse marks for numeric comparison
         if is_field:
@@ -301,6 +301,7 @@ class WhatItTakesToWin:
             bronze_results = df[df[rank_col] == 3]['ParsedMark']
             final_results = df[df[rank_col] == 8]['ParsedMark']
             top_8_results = df[df[rank_col] <= 8]['ParsedMark']
+            top_20_results = df[df[rank_col] <= 20]['ParsedMark']
 
             # Get representative values (median for more stable results)
             gold = gold_results.median() if len(gold_results) > 0 else None
@@ -308,6 +309,7 @@ class WhatItTakesToWin:
             bronze = bronze_results.median() if len(bronze_results) > 0 else None
             final_standard = final_results.median() if len(final_results) > 0 else None
             top_8_avg = top_8_results.mean() if len(top_8_results) > 0 else None
+            top_20_avg = top_20_results.mean() if len(top_20_results) > 0 else None
 
             return {
                 'gold': gold,
@@ -315,6 +317,7 @@ class WhatItTakesToWin:
                 'bronze': bronze,
                 'final_standard': final_standard,
                 'top_8_avg': top_8_avg,
+                'top_20_avg': top_20_avg,
                 'is_field_event': is_field,
                 'sample_size': len(df)
             }
@@ -339,6 +342,7 @@ class WhatItTakesToWin:
             'bronze': marks[2] if len(marks) > 2 else None,
             'final_standard': marks[7] if len(marks) > 7 else marks[-1] if marks else None,
             'top_8_avg': np.mean(marks[:8]) if len(marks) >= 8 else np.mean(marks) if marks else None,
+            'top_20_avg': np.mean(marks[:20]) if len(marks) >= 20 else np.mean(marks) if marks else None,
             'is_field_event': is_field,
             'sample_size': len(marks)
         }
@@ -413,6 +417,7 @@ class WhatItTakesToWin:
                     'Bronze Standard': self.format_mark(standards['bronze'], event),
                     'Final Standard (8th)': self.format_mark(standards['final_standard'], event),
                     'Top 8 Average': self.format_mark(standards['top_8_avg'], event),
+                    'Top 20 Average': self.format_mark(standards.get('top_20_avg'), event),
                     'Sample Size': standards['sample_size'],
                     'Gold_Raw': standards['gold'],
                     'Silver_Raw': standards['silver'],

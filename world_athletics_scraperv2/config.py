@@ -38,6 +38,9 @@ EVENTS = {
 
 # Default scraping parameters
 DEFAULT_YEARS = [2024, 2025]
+
+# Historical years to fill the 2003-2019 gap
+HISTORICAL_YEARS = list(range(2003, 2020))  # 2003-2019 inclusive
 DEFAULT_NUM_PERFORMANCES = 7000
 DEFAULT_AGE_CATEGORY = ['senior'] #U18, U20
 DEFAULT_BEST_RESULTS_ONLY = [True]
