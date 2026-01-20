@@ -61,6 +61,137 @@ TEAL_LIGHT = '#009688'
 GRAY_BLUE = '#78909C'
 
 ###################################
+# Project East 2026 - Asian Games Strategy
+###################################
+PROJECT_EAST_ATHLETES = [
+    {
+        'name': 'Mohammed Al Atafi',
+        'event': '200m',
+        'pb': 20.68,
+        'sb': 20.68,
+        'medal_standard': 20.20,
+        'asian_games_2023': 20.96,
+        'trajectory': 'Improving - PB in 2024',
+        'status': 'medal_contender',
+        'age': 23,
+        'notes': 'Consistent improvements, potential to break 20.50'
+    },
+    {
+        'name': 'Hussain Al Hizam',
+        'event': 'Pole Vault',
+        'pb': 5.72,
+        'sb': 5.72,
+        'medal_standard': 5.70,
+        'asian_games_2023': 5.60,
+        'trajectory': 'Peaked - Defending Asian champion',
+        'status': 'medal_favorite',
+        'age': 27,
+        'notes': 'Reigning Asian Games champion, consistent performer'
+    },
+    {
+        'name': 'Mohamed Tolo',
+        'event': 'Shot Put',
+        'pb': 20.23,
+        'sb': 20.09,
+        'medal_standard': 20.50,
+        'asian_games_2023': 19.87,
+        'trajectory': 'Improving - Room for growth',
+        'status': 'medal_contender',
+        'age': 26,
+        'notes': '4th at 2023 Asian Games, closing gap to medal zone'
+    },
+    {
+        'name': 'Yasser Bakheet',
+        'event': 'Triple Jump',
+        'pb': 17.08,
+        'sb': 17.08,
+        'medal_standard': 16.90,
+        'asian_games_2023': 16.58,
+        'trajectory': 'Improving - New PB in 2024',
+        'status': 'medal_contender',
+        'age': 24,
+        'notes': 'Breakthrough season in 2024, medal potential'
+    },
+    {
+        'name': 'Abdelati Bizimana',
+        'event': '800m',
+        'pb': 104.50,  # 1:44.50 in seconds
+        'sb': 105.20,  # 1:45.20 in seconds
+        'medal_standard': 104.00,  # 1:44.00
+        'asian_games_2023': 106.80,  # 1:46.80
+        'trajectory': 'Development - Building base',
+        'status': 'development',
+        'age': 22,
+        'notes': 'Talented young runner, 2-3 year development plan'
+    },
+    {
+        'name': 'Muaz Al Dubaisi',
+        'event': 'Hammer Throw',
+        'pb': 73.50,
+        'sb': 72.80,
+        'medal_standard': 74.00,
+        'asian_games_2023': 71.20,
+        'trajectory': 'Improving - Consistent gains',
+        'status': 'medal_contender',
+        'age': 25,
+        'notes': 'Strong domestic performer, needs international exposure'
+    },
+    {
+        'name': 'Yaqoub Al Muawi',
+        'event': '400m Hurdles',
+        'pb': 49.12,
+        'sb': 49.45,
+        'medal_standard': 48.80,
+        'asian_games_2023': 50.02,
+        'trajectory': 'Improving - Technical refinement',
+        'status': 'medal_contender',
+        'age': 24,
+        'notes': 'PB at World Championships qualifier'
+    },
+    {
+        'name': 'Nasser Mohammed',
+        'event': '100m',
+        'pb': 10.18,
+        'sb': 10.22,
+        'medal_standard': 10.05,
+        'asian_games_2023': 10.35,
+        'trajectory': 'Improving - Speed development',
+        'status': 'development',
+        'age': 21,
+        'notes': 'Young sprinter with potential, needs race experience'
+    },
+    {
+        'name': '4x100m Relay',
+        'event': '4x100m Relay',
+        'pb': 38.88,
+        'sb': 39.12,
+        'medal_standard': 38.50,
+        'asian_games_2023': 39.45,
+        'trajectory': 'Improving - Team cohesion building',
+        'status': 'medal_contender',
+        'age': None,
+        'notes': 'Best Saudi relay time in 2024, medal potential with clean exchanges'
+    }
+]
+
+PROJECT_EAST_MEDAL_GOALS = {
+    'gold': 1,
+    'silver': 1,
+    'bronze': 2,
+    'total_target': '3-5',
+    'high_probability': ['Pole Vault', 'Triple Jump'],
+    'medal_contenders': ['200m', 'Shot Put', '400m Hurdles', '4x100m Relay'],
+    'development': ['800m', '100m', 'Hammer Throw']
+}
+
+PROJECT_EAST_TIMELINE = {
+    'phase_1': {'name': 'Foundation', 'dates': 'Jan-Mar 2025', 'focus': 'Base training, technique'},
+    'phase_2': {'name': 'Build', 'dates': 'Apr-Jun 2025', 'focus': 'Competition exposure, rankings'},
+    'phase_3': {'name': 'Peak', 'dates': 'Jul-Sep 2026', 'focus': 'Asian Games preparation'},
+    'asian_games': {'name': 'Asian Games', 'dates': 'Sep 2026', 'location': 'Aichi-Nagoya, Japan'}
+}
+
+###################################
 # AI Chatbot Configuration
 ###################################
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -739,7 +870,7 @@ def get_qual_standards_df():
 ###################################
 # 7) Tabs
 ###################################
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
     'Event Standards & Progression',
     'Athlete Profiles',
     'Combined Rankings',
@@ -748,7 +879,8 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     'Major Games Analytics',
     'What It Takes to Win (Live)',
     'AI Analyst',
-    'Coach View'
+    'Coach View',
+    'Project East 2026'
 ])
 
 ###################################
@@ -3154,6 +3286,437 @@ with tab9:
 
         To enable, ensure `coach_view.py` and its dependencies are installed.
         """)
+
+###################################
+# Tab 10: Project East 2026
+###################################
+with tab10:
+    # Header with Asian Games branding
+    st.markdown(f"""
+    <div style="background: linear-gradient(135deg, {TEAL_PRIMARY} 0%, {TEAL_DARK} 100%); padding: 1.5rem; border-radius: 12px; margin-bottom: 1.5rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                <h1 style="color: white; margin: 0; font-size: 2rem;">Project East 2026</h1>
+                <p style="color: rgba(255,255,255,0.9); margin: 0.5rem 0 0 0; font-size: 1.1rem;">Saudi Arabia Athletics Strategy - Asian Games Aichi-Nagoya</p>
+            </div>
+            <div style="text-align: right;">
+                <p style="color: {GOLD_ACCENT}; font-size: 2.5rem; font-weight: bold; margin: 0;">3-5</p>
+                <p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 0.9rem;">Medal Target</p>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Executive Summary - Medal Goals
+    st.subheader("Executive Summary")
+
+    medal_cols = st.columns(4)
+    with medal_cols[0]:
+        st.markdown(f"""
+        <div style="background: linear-gradient(135deg, #FFD700 0%, #FFA500 100%); padding: 1rem; border-radius: 8px; text-align: center;">
+            <p style="color: rgba(0,0,0,0.6); margin: 0; font-size: 0.85rem;">Gold Target</p>
+            <p style="color: #000; font-size: 2.5rem; font-weight: bold; margin: 0;">{PROJECT_EAST_MEDAL_GOALS['gold']}</p>
+        </div>
+        """, unsafe_allow_html=True)
+    with medal_cols[1]:
+        st.markdown(f"""
+        <div style="background: linear-gradient(135deg, #C0C0C0 0%, #A8A8A8 100%); padding: 1rem; border-radius: 8px; text-align: center;">
+            <p style="color: rgba(0,0,0,0.6); margin: 0; font-size: 0.85rem;">Silver Target</p>
+            <p style="color: #000; font-size: 2.5rem; font-weight: bold; margin: 0;">{PROJECT_EAST_MEDAL_GOALS['silver']}</p>
+        </div>
+        """, unsafe_allow_html=True)
+    with medal_cols[2]:
+        st.markdown(f"""
+        <div style="background: linear-gradient(135deg, #CD7F32 0%, #B8860B 100%); padding: 1rem; border-radius: 8px; text-align: center;">
+            <p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 0.85rem;">Bronze Target</p>
+            <p style="color: white; font-size: 2.5rem; font-weight: bold; margin: 0;">{PROJECT_EAST_MEDAL_GOALS['bronze']}</p>
+        </div>
+        """, unsafe_allow_html=True)
+    with medal_cols[3]:
+        st.markdown(f"""
+        <div style="background: {TEAL_PRIMARY}; padding: 1rem; border-radius: 8px; text-align: center;">
+            <p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 0.85rem;">Total Range</p>
+            <p style="color: white; font-size: 2.5rem; font-weight: bold; margin: 0;">{PROJECT_EAST_MEDAL_GOALS['total_target']}</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Strategic Categories
+    st.markdown("---")
+    st.subheader("Strategic Framework")
+
+    strat_cols = st.columns(3)
+    with strat_cols[0]:
+        st.markdown(f"""
+        <div style="background: rgba(0,113,103,0.2); border-left: 4px solid {TEAL_PRIMARY}; padding: 1rem; border-radius: 0 8px 8px 0;">
+            <h4 style="color: {TEAL_PRIMARY}; margin: 0;">High Probability</h4>
+            <p style="color: #ccc; margin: 0.5rem 0 0 0; font-size: 0.9rem;">Medal favorites with proven results</p>
+            <ul style="color: white; margin: 0.5rem 0 0 0; padding-left: 1.2rem;">
+                {''.join([f'<li>{e}</li>' for e in PROJECT_EAST_MEDAL_GOALS['high_probability']])}
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
+    with strat_cols[1]:
+        st.markdown(f"""
+        <div style="background: rgba(160,142,102,0.2); border-left: 4px solid {GOLD_ACCENT}; padding: 1rem; border-radius: 0 8px 8px 0;">
+            <h4 style="color: {GOLD_ACCENT}; margin: 0;">Medal Contenders</h4>
+            <p style="color: #ccc; margin: 0.5rem 0 0 0; font-size: 0.9rem;">Within striking distance of podium</p>
+            <ul style="color: white; margin: 0.5rem 0 0 0; padding-left: 1.2rem;">
+                {''.join([f'<li>{e}</li>' for e in PROJECT_EAST_MEDAL_GOALS['medal_contenders']])}
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
+    with strat_cols[2]:
+        st.markdown(f"""
+        <div style="background: rgba(120,144,156,0.2); border-left: 4px solid {GRAY_BLUE}; padding: 1rem; border-radius: 0 8px 8px 0;">
+            <h4 style="color: {GRAY_BLUE}; margin: 0;">Development Track</h4>
+            <p style="color: #ccc; margin: 0.5rem 0 0 0; font-size: 0.9rem;">Building towards 2030</p>
+            <ul style="color: white; margin: 0.5rem 0 0 0; padding-left: 1.2rem;">
+                {''.join([f'<li>{e}</li>' for e in PROJECT_EAST_MEDAL_GOALS['development']])}
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Medal Portfolio Table
+    st.markdown("---")
+    st.subheader("Medal Portfolio - 9 Elite Athletes")
+
+    # Create portfolio dataframe
+    portfolio_data = []
+    for athlete in PROJECT_EAST_ATHLETES:
+        is_800m = athlete['event'] == '800m'
+
+        # Format times for 800m
+        if is_800m:
+            pb_display = f"{int(athlete['pb']//60)}:{athlete['pb']%60:05.2f}"
+            sb_display = f"{int(athlete['sb']//60)}:{athlete['sb']%60:05.2f}"
+            medal_std_display = f"{int(athlete['medal_standard']//60)}:{athlete['medal_standard']%60:05.2f}"
+        else:
+            pb_display = f"{athlete['pb']:.2f}"
+            sb_display = f"{athlete['sb']:.2f}"
+            medal_std_display = f"{athlete['medal_standard']:.2f}"
+
+        # Calculate gap to medal standard
+        if is_field_event(athlete['event']):
+            gap = athlete['medal_standard'] - athlete['pb']
+            gap_pct = (gap / athlete['medal_standard']) * 100
+            qualified = athlete['pb'] >= athlete['medal_standard']
+        else:
+            gap = athlete['pb'] - athlete['medal_standard']
+            gap_pct = (gap / athlete['medal_standard']) * 100
+            qualified = athlete['pb'] <= athlete['medal_standard']
+
+        # Status badge
+        if athlete['status'] == 'medal_favorite':
+            status_badge = '🥇 Favorite'
+            status_color = TEAL_PRIMARY
+        elif athlete['status'] == 'medal_contender':
+            status_badge = '🎯 Contender'
+            status_color = GOLD_ACCENT
+        else:
+            status_badge = '📈 Development'
+            status_color = GRAY_BLUE
+
+        portfolio_data.append({
+            'Athlete': athlete['name'],
+            'Event': athlete['event'],
+            'PB': pb_display,
+            'SB': sb_display,
+            'Medal Std': medal_std_display,
+            'Gap %': f"{abs(gap_pct):.1f}%",
+            'Status': status_badge,
+            'Trajectory': athlete['trajectory'].split(' - ')[0]
+        })
+
+    portfolio_df = pd.DataFrame(portfolio_data)
+
+    # Style the dataframe
+    def highlight_status(row):
+        if '🥇' in row['Status']:
+            return [f'background-color: rgba(0,113,103,0.3)'] * len(row)
+        elif '🎯' in row['Status']:
+            return [f'background-color: rgba(160,142,102,0.2)'] * len(row)
+        return [''] * len(row)
+
+    st.dataframe(
+        portfolio_df.style.apply(highlight_status, axis=1),
+        use_container_width=True,
+        hide_index=True,
+        height=400
+    )
+
+    # Individual Athlete Profiles
+    st.markdown("---")
+    st.subheader("Individual Athlete Profiles")
+
+    # Athlete selector
+    athlete_names = [a['name'] for a in PROJECT_EAST_ATHLETES]
+    selected_athlete = st.selectbox("Select Athlete", athlete_names, key="project_east_athlete")
+
+    # Get selected athlete data
+    athlete_data = next((a for a in PROJECT_EAST_ATHLETES if a['name'] == selected_athlete), None)
+
+    if athlete_data:
+        prof_cols = st.columns([2, 1])
+
+        with prof_cols[0]:
+            # Profile card
+            status_color = TEAL_PRIMARY if athlete_data['status'] == 'medal_favorite' else (GOLD_ACCENT if athlete_data['status'] == 'medal_contender' else GRAY_BLUE)
+
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, rgba(0,0,0,0.5) 0%, rgba(0,0,0,0.3) 100%);
+                        border-left: 5px solid {status_color}; padding: 1.5rem; border-radius: 0 12px 12px 0;">
+                <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                    <div>
+                        <h2 style="color: white; margin: 0;">{athlete_data['name']}</h2>
+                        <p style="color: {GOLD_ACCENT}; font-size: 1.2rem; margin: 0.25rem 0;">{athlete_data['event']}</p>
+                        <p style="color: #aaa; margin: 0.5rem 0 0 0;">Age: {athlete_data['age'] if athlete_data['age'] else 'N/A'}</p>
+                    </div>
+                    <div style="text-align: right;">
+                        <p style="color: rgba(255,255,255,0.7); margin: 0; font-size: 0.85rem;">Personal Best</p>
+                        <p style="color: white; font-size: 2rem; font-weight: bold; margin: 0;">
+                            {f"{int(athlete_data['pb']//60)}:{athlete_data['pb']%60:05.2f}" if athlete_data['event'] == '800m' else f"{athlete_data['pb']:.2f}"}
+                        </p>
+                    </div>
+                </div>
+                <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid rgba(255,255,255,0.1);">
+                    <p style="color: #ccc; margin: 0;"><strong>Trajectory:</strong> {athlete_data['trajectory']}</p>
+                    <p style="color: #aaa; margin: 0.5rem 0 0 0; font-style: italic;">{athlete_data['notes']}</p>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with prof_cols[1]:
+            # Performance metrics
+            is_800m = athlete_data['event'] == '800m'
+            is_field = is_field_event(athlete_data['event'])
+
+            if is_field:
+                gap = athlete_data['medal_standard'] - athlete_data['pb']
+                gap_pct = (gap / athlete_data['medal_standard']) * 100
+            else:
+                gap = athlete_data['pb'] - athlete_data['medal_standard']
+                gap_pct = (gap / athlete_data['medal_standard']) * 100
+
+            st.markdown(f"""
+            <div style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px; margin-bottom: 0.5rem;">
+                <p style="color: #aaa; margin: 0; font-size: 0.8rem;">Season Best</p>
+                <p style="color: white; font-size: 1.5rem; font-weight: bold; margin: 0;">
+                    {f"{int(athlete_data['sb']//60)}:{athlete_data['sb']%60:05.2f}" if is_800m else f"{athlete_data['sb']:.2f}"}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+
+            st.markdown(f"""
+            <div style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px; margin-bottom: 0.5rem;">
+                <p style="color: #aaa; margin: 0; font-size: 0.8rem;">Medal Standard</p>
+                <p style="color: {GOLD_ACCENT}; font-size: 1.5rem; font-weight: bold; margin: 0;">
+                    {f"{int(athlete_data['medal_standard']//60)}:{athlete_data['medal_standard']%60:05.2f}" if is_800m else f"{athlete_data['medal_standard']:.2f}"}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+
+            gap_color = TEAL_PRIMARY if gap_pct <= 0 else (GOLD_ACCENT if gap_pct <= 3 else '#dc3545')
+            st.markdown(f"""
+            <div style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px;">
+                <p style="color: #aaa; margin: 0; font-size: 0.8rem;">Gap to Medal</p>
+                <p style="color: {gap_color}; font-size: 1.5rem; font-weight: bold; margin: 0;">
+                    {abs(gap_pct):.1f}% {'✓' if gap_pct <= 0 else ''}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # Performance progression chart
+        st.markdown("#### Performance Progression")
+
+        # Create mock progression data (in a real implementation, pull from database)
+        # Using the data we have: Asian Games 2023 result, current SB, current PB
+        is_800m = athlete_data['event'] == '800m'
+
+        progression_data = {
+            'Period': ['Asian Games 2023', '2024 SB', '2024 PB', 'Medal Standard'],
+            'Performance': [
+                athlete_data['asian_games_2023'],
+                athlete_data['sb'],
+                athlete_data['pb'],
+                athlete_data['medal_standard']
+            ]
+        }
+
+        fig_prog = go.Figure()
+
+        # Actual performances
+        fig_prog.add_trace(go.Scatter(
+            x=progression_data['Period'][:3],
+            y=progression_data['Performance'][:3],
+            mode='lines+markers',
+            name='Actual',
+            line=dict(color=TEAL_PRIMARY, width=3),
+            marker=dict(size=12, color=TEAL_PRIMARY)
+        ))
+
+        # Medal standard line
+        fig_prog.add_hline(
+            y=athlete_data['medal_standard'],
+            line_dash="dash",
+            line_color=GOLD_ACCENT,
+            annotation_text="Medal Standard",
+            annotation_position="right"
+        )
+
+        # PB marker
+        fig_prog.add_trace(go.Scatter(
+            x=['2024 PB'],
+            y=[athlete_data['pb']],
+            mode='markers',
+            name='Personal Best',
+            marker=dict(symbol='star', size=18, color=GOLD_ACCENT)
+        ))
+
+        # Invert y-axis for track events (lower is better)
+        if not is_field:
+            fig_prog.update_yaxes(autorange='reversed')
+
+        fig_prog.update_layout(
+            title=f"{athlete_data['name']} - {athlete_data['event']} Progression",
+            xaxis_title="",
+            yaxis_title="Performance" + (" (seconds)" if is_800m or athlete_data['event'] in ['100m', '200m', '400m', '400m Hurdles'] else " (m)"),
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            font=dict(color='white'),
+            height=350,
+            showlegend=True,
+            legend=dict(orientation='h', y=-0.15)
+        )
+        fig_prog.update_xaxes(showgrid=False)
+        fig_prog.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.2)')
+
+        st.plotly_chart(fig_prog, use_container_width=True)
+
+    # 4x100m Relay Speed Benchmark Section
+    st.markdown("---")
+    st.subheader("4x100m Relay Speed Benchmark")
+
+    # Relay athlete speeds (mock data based on 100m times)
+    relay_data = {
+        'Leg': ['Leg 1 (Start)', 'Leg 2', 'Leg 3', 'Leg 4 (Anchor)'],
+        'Athlete': ['Nasser Mohammed', 'Mohammed Al Atafi', 'Athlete C', 'Athlete D'],
+        '100m PB': [10.18, 10.45, 10.52, 10.35],
+        'Flying Speed': [9.80, 10.05, 10.12, 9.95],  # Estimated flying 100m
+        'Split Target': [10.20, 9.50, 9.50, 9.30]  # Target relay splits
+    }
+
+    relay_df = pd.DataFrame(relay_data)
+
+    relay_cols = st.columns([1, 1])
+
+    with relay_cols[0]:
+        st.markdown("**Leg Analysis**")
+        st.dataframe(relay_df, use_container_width=True, hide_index=True)
+
+        st.markdown(f"""
+        <div style="background: rgba(0,113,103,0.2); padding: 1rem; border-radius: 8px; margin-top: 1rem;">
+            <p style="color: white; margin: 0;"><strong>Current Best:</strong> 38.88</p>
+            <p style="color: {GOLD_ACCENT}; margin: 0.25rem 0 0 0;"><strong>Target:</strong> 38.50 (Medal Standard)</p>
+            <p style="color: #aaa; margin: 0.5rem 0 0 0; font-size: 0.9rem;">
+                Gap: 0.38s - Achievable with clean exchanges
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with relay_cols[1]:
+        # Relay speed comparison chart
+        fig_relay = go.Figure()
+
+        fig_relay.add_trace(go.Bar(
+            name='100m PB',
+            x=relay_data['Leg'],
+            y=relay_data['100m PB'],
+            marker_color=GRAY_BLUE,
+            text=relay_data['100m PB'],
+            textposition='outside'
+        ))
+
+        fig_relay.add_trace(go.Bar(
+            name='Target Split',
+            x=relay_data['Leg'],
+            y=relay_data['Split Target'],
+            marker_color=TEAL_PRIMARY,
+            text=relay_data['Split Target'],
+            textposition='outside'
+        ))
+
+        fig_relay.update_layout(
+            title="100m PB vs Target Relay Split",
+            barmode='group',
+            xaxis_title="",
+            yaxis_title="Time (seconds)",
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            font=dict(color='white'),
+            height=350,
+            yaxis=dict(range=[8.5, 11]),
+            legend=dict(orientation='h', y=-0.15)
+        )
+        fig_relay.update_xaxes(showgrid=False)
+        fig_relay.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.2)')
+
+        st.plotly_chart(fig_relay, use_container_width=True)
+
+    # Timeline
+    st.markdown("---")
+    st.subheader("Road to Aichi-Nagoya 2026")
+
+    timeline_cols = st.columns(4)
+
+    for i, (phase_key, phase_data) in enumerate(PROJECT_EAST_TIMELINE.items()):
+        with timeline_cols[i]:
+            is_current = phase_key == 'phase_1'  # Assume we're in phase 1
+            bg_color = TEAL_PRIMARY if is_current else 'rgba(0,0,0,0.3)'
+
+            st.markdown(f"""
+            <div style="background: {bg_color}; padding: 1rem; border-radius: 8px; text-align: center; height: 150px;">
+                <p style="color: {GOLD_ACCENT if is_current else '#aaa'}; margin: 0; font-size: 0.8rem;">{phase_data['dates']}</p>
+                <h4 style="color: white; margin: 0.5rem 0;">{phase_data['name']}</h4>
+                <p style="color: rgba(255,255,255,0.8); margin: 0.5rem 0 0 0; font-size: 0.85rem;">
+                    {phase_data.get('focus', phase_data.get('location', ''))}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+
+    # Key Performance Indicators
+    st.markdown("---")
+    st.subheader("Success Metrics & KPIs")
+
+    kpi_cols = st.columns(4)
+
+    with kpi_cols[0]:
+        # Count athletes at/above medal standard
+        qualified_count = sum(1 for a in PROJECT_EAST_ATHLETES
+                            if (is_field_event(a['event']) and a['pb'] >= a['medal_standard']) or
+                               (not is_field_event(a['event']) and a['pb'] <= a['medal_standard']))
+        st.metric("Athletes at Medal Standard", f"{qualified_count}/9", delta=None)
+
+    with kpi_cols[1]:
+        # Average gap to medal standard
+        gaps = []
+        for a in PROJECT_EAST_ATHLETES:
+            if is_field_event(a['event']):
+                gap_pct = ((a['medal_standard'] - a['pb']) / a['medal_standard']) * 100
+            else:
+                gap_pct = ((a['pb'] - a['medal_standard']) / a['medal_standard']) * 100
+            gaps.append(gap_pct)
+        avg_gap = sum(gaps) / len(gaps)
+        st.metric("Avg Gap to Medal Std", f"{avg_gap:.1f}%", delta=None)
+
+    with kpi_cols[2]:
+        # Medal favorites count
+        favorites = sum(1 for a in PROJECT_EAST_ATHLETES if a['status'] == 'medal_favorite')
+        st.metric("Medal Favorites", favorites, delta=None)
+
+    with kpi_cols[3]:
+        # Contenders count
+        contenders = sum(1 for a in PROJECT_EAST_ATHLETES if a['status'] == 'medal_contender')
+        st.metric("Medal Contenders", contenders, delta=None)
 
 ###################################
 # Footer
