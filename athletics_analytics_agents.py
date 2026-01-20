@@ -660,17 +660,30 @@ class MajorGamesAnalyzer(BaseAthleticsAgent):
 
         comp_upper = str(competition_name).upper()
 
-        # Extended keywords for better matching
+        # Extended keywords for better matching - includes stadium names used at major championships
         extended_keywords = {
-            'Olympic': ['OLYMPIC', 'OLYMPICS', 'OG 20', 'OG 202'],
-            'World Championships': ['WORLD ATHLETICS CHAMPIONSHIPS', 'WORLD CHAMPIONSHIPS', 'WCH', 'BUDAPEST', 'OREGON', 'DOHA', 'LONDON', 'BEIJING'],
+            'Olympic': ['OLYMPIC', 'OLYMPICS', 'OG 20', 'OG 202', 'NATIONAL STADIUM, TOKYO'],
+            'World Championships': [
+                'WORLD ATHLETICS CHAMPIONSHIPS', 'WORLD CHAMPIONSHIPS', 'WCH',
+                'BUDAPEST', 'OREGON', 'HAYWARD FIELD', 'NATIONAL STADIUM, BEIJING',
+                'LUZHNIKI', 'BIRD\'S NEST', 'KHALIFA', 'LONDON STADIUM'
+            ],
             'World U20': ['WORLD ATHLETICS U20', 'WORLD U20', 'WORLD JUNIOR'],
-            'Asian Games': ['ASIAN GAMES', 'ASIAD', 'HANGZHOU', 'JAKARTA'],
-            'Asian Championships': ['ASIAN ATHLETICS', 'ASIAN INDOOR', 'ASIAN CHAMP'],
-            'West Asian': ['WEST ASIAN', 'WEST ASIA'],
-            'Arab Championships': ['ARAB ATHLETICS', 'ARAB U18', 'ARAB U20', 'ARAB U23', 'PAN ARAB', 'ARAB CHAMP'],
-            'GCC': ['GCC YOUTH', 'GCC CHAMPION', 'GULF COOPERATION'],
-            'Diamond League': ['DIAMOND LEAGUE', 'DL ', 'ZURICH', 'BRUSSELS', 'MONACO', 'ROME'],
+            'Asian Games': [
+                'ASIAN GAMES', 'ASIAD', 'HANGZHOU', 'JAKARTA', 'INCHEON',
+                'GUANGZHOU', 'GELORA BUNG KARNO'
+            ],
+            'Asian Championships': [
+                'ASIAN ATHLETICS', 'ASIAN INDOOR', 'ASIAN CHAMP',
+                'TASHKENT', 'AFU ATHLETICS STADIUM'
+            ],
+            'West Asian': ['WEST ASIAN', 'WEST ASIA', 'BASRA', 'AL-FAYHAA'],
+            'Arab Championships': [
+                'ARAB ATHLETICS', 'ARAB U18', 'ARAB U20', 'ARAB U23', 'PAN ARAB', 'ARAB CHAMP',
+                'ORAN', 'MILOUD', 'RADES', 'RAD\xc8S', 'CAIRO', 'ALGIERS', 'TUNIS'
+            ],
+            'GCC': ['GCC YOUTH', 'GCC CHAMPION', 'GULF COOPERATION', 'KUWAIT', 'MANAMA', 'MUSCAT'],
+            'Diamond League': ['DIAMOND LEAGUE', 'DL ', 'ZURICH', 'BRUSSELS', 'MONACO', 'ROME DIAMOND'],
         }
 
         for category, keywords in extended_keywords.items():
