@@ -1009,12 +1009,195 @@ with tab2:
 
                             if not athlete_results.empty:
                                 # Determine actual primary event from results (most competitions)
+                                primary_event = None
                                 if 'event' in athlete_results.columns:
                                     event_counts = athlete_results['event'].value_counts()
                                     if not event_counts.empty:
-                                        actual_primary_event = event_counts.index[0]
-                                        st.markdown(f"<p style='color: {GOLD_ACCENT}; font-size: 0.9rem;'><strong>Main Event:</strong> {actual_primary_event} ({event_counts.iloc[0]} results)</p>", unsafe_allow_html=True)
+                                        primary_event = event_counts.index[0]
+                                        st.markdown(f"<p style='color: {GOLD_ACCENT}; font-size: 0.9rem;'><strong>Main Event:</strong> {primary_event} ({event_counts.iloc[0]} results)</p>", unsafe_allow_html=True)
 
+                                # === PERFORMANCE TREND ANALYSIS ===
+                                st.markdown("---")
+                                st.subheader("Performance Trend Analysis")
+
+                                # Parse numeric results
+                                def parse_result_to_numeric(result, event_name=''):
+                                    if pd.isna(result):
+                                        return None
+                                    result_str = str(result).strip()
+                                    try:
+                                        # Handle time formats (e.g., "10.45", "1:59.00")
+                                        if ':' in result_str:
+                                            parts = result_str.split(':')
+                                            if len(parts) == 2:
+                                                return float(parts[0]) * 60 + float(parts[1])
+                                        return float(result_str)
+                                    except:
+                                        return None
+
+                                athlete_results_copy = athlete_results.copy()
+                                athlete_results_copy['result_numeric'] = athlete_results_copy['result'].apply(
+                                    lambda x: parse_result_to_numeric(x, primary_event or '')
+                                )
+                                athlete_results_copy = athlete_results_copy.dropna(subset=['result_numeric'])
+
+                                if not athlete_results_copy.empty and 'date' in athlete_results_copy.columns:
+                                    # Convert date and sort
+                                    athlete_results_copy['date'] = pd.to_datetime(athlete_results_copy['date'], errors='coerce')
+                                    athlete_results_copy = athlete_results_copy.dropna(subset=['date'])
+                                    athlete_results_copy = athlete_results_copy.sort_values('date')
+
+                                    # Determine if track (lower=better) or field (higher=better)
+                                    is_field = any(kw in (primary_event or '').lower() for kw in ['jump', 'vault', 'put', 'throw', 'discus', 'javelin', 'hammer'])
+
+                                    # Calculate trend metrics
+                                    if len(athlete_results_copy) >= 3:
+                                        results_list = athlete_results_copy['result_numeric'].tolist()
+                                        first_half = np.mean(results_list[:len(results_list)//2])
+                                        second_half = np.mean(results_list[len(results_list)//2:])
+
+                                        if is_field:
+                                            trend_value = second_half - first_half
+                                            trend_direction = "📈 Improving" if trend_value > 0 else ("📉 Declining" if trend_value < 0 else "➡️ Stable")
+                                        else:
+                                            trend_value = first_half - second_half
+                                            trend_direction = "📈 Improving" if trend_value > 0 else ("📉 Declining" if trend_value < 0 else "➡️ Stable")
+
+                                        # Season best
+                                        current_year = pd.Timestamp.now().year
+                                        season_data = athlete_results_copy[athlete_results_copy['date'].dt.year == current_year]
+                                        if not season_data.empty:
+                                            if is_field:
+                                                season_best = season_data['result_numeric'].max()
+                                            else:
+                                                season_best = season_data['result_numeric'].min()
+                                        else:
+                                            season_best = None
+
+                                        # Personal best
+                                        if is_field:
+                                            pb = athlete_results_copy['result_numeric'].max()
+                                            pb_row = athlete_results_copy[athlete_results_copy['result_numeric'] == pb].iloc[0]
+                                        else:
+                                            pb = athlete_results_copy['result_numeric'].min()
+                                            pb_row = athlete_results_copy[athlete_results_copy['result_numeric'] == pb].iloc[0]
+
+                                        # Display metrics
+                                        trend_cols = st.columns(5)
+                                        with trend_cols[0]:
+                                            st.markdown(f"""
+                                            <div style="background: {TEAL_PRIMARY}; padding: 0.8rem; border-radius: 8px; text-align: center;">
+                                                <p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 0.75rem;">Form Trend</p>
+                                                <p style="color: white; font-size: 1.2rem; font-weight: bold; margin: 0;">{trend_direction}</p>
+                                            </div>
+                                            """, unsafe_allow_html=True)
+                                        with trend_cols[1]:
+                                            st.markdown(f"""
+                                            <div style="background: {GOLD_ACCENT}; padding: 0.8rem; border-radius: 8px; text-align: center;">
+                                                <p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 0.75rem;">Personal Best</p>
+                                                <p style="color: white; font-size: 1.2rem; font-weight: bold; margin: 0;">{pb_row['result']}</p>
+                                            </div>
+                                            """, unsafe_allow_html=True)
+                                        with trend_cols[2]:
+                                            sb_display = 'N/A'
+                                            if season_best is not None and not season_data.empty:
+                                                try:
+                                                    if is_field:
+                                                        sb_idx = season_data['result_numeric'].idxmax()
+                                                    else:
+                                                        sb_idx = season_data['result_numeric'].idxmin()
+                                                    sb_display = season_data.loc[sb_idx, 'result']
+                                                except:
+                                                    sb_display = f"{season_best:.2f}"
+                                            st.markdown(f"""
+                                            <div style="background: #4CAF50; padding: 0.8rem; border-radius: 8px; text-align: center;">
+                                                <p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 0.75rem;">Season Best {current_year}</p>
+                                                <p style="color: white; font-size: 1.2rem; font-weight: bold; margin: 0;">{sb_display}</p>
+                                            </div>
+                                            """, unsafe_allow_html=True)
+                                        with trend_cols[3]:
+                                            st.markdown(f"""
+                                            <div style="background: {GRAY_BLUE}; padding: 0.8rem; border-radius: 8px; text-align: center;">
+                                                <p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 0.75rem;">Results Count</p>
+                                                <p style="color: white; font-size: 1.2rem; font-weight: bold; margin: 0;">{len(athlete_results_copy)}</p>
+                                            </div>
+                                            """, unsafe_allow_html=True)
+                                        with trend_cols[4]:
+                                            avg_result = athlete_results_copy['result_numeric'].mean()
+                                            st.markdown(f"""
+                                            <div style="background: #2196F3; padding: 0.8rem; border-radius: 8px; text-align: center;">
+                                                <p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 0.75rem;">Average</p>
+                                                <p style="color: white; font-size: 1.2rem; font-weight: bold; margin: 0;">{avg_result:.2f}</p>
+                                            </div>
+                                            """, unsafe_allow_html=True)
+
+                                        # === PERFORMANCE PROGRESSION CHART ===
+                                        st.markdown("---")
+                                        st.subheader("Performance Progression")
+
+                                        # Filter to primary event for cleaner chart
+                                        if primary_event and 'event' in athlete_results_copy.columns:
+                                            chart_data = athlete_results_copy[athlete_results_copy['event'] == primary_event].copy()
+                                        else:
+                                            chart_data = athlete_results_copy.copy()
+
+                                        if not chart_data.empty:
+                                            # Create progression chart
+                                            fig_athlete = go.Figure()
+
+                                            # Add performance line
+                                            fig_athlete.add_trace(go.Scatter(
+                                                x=chart_data['date'],
+                                                y=chart_data['result_numeric'],
+                                                mode='lines+markers',
+                                                name='Performance',
+                                                line=dict(color=TEAL_PRIMARY, width=2),
+                                                marker=dict(size=8, color=TEAL_PRIMARY),
+                                                hovertemplate="<b>%{x|%Y-%m-%d}</b><br>Result: %{y:.2f}<extra></extra>"
+                                            ))
+
+                                            # Add trend line
+                                            if len(chart_data) >= 3:
+                                                x_numeric = np.arange(len(chart_data))
+                                                z = np.polyfit(x_numeric, chart_data['result_numeric'].values, 1)
+                                                p = np.poly1d(z)
+                                                fig_athlete.add_trace(go.Scatter(
+                                                    x=chart_data['date'],
+                                                    y=p(x_numeric),
+                                                    mode='lines',
+                                                    name='Trend',
+                                                    line=dict(color=GOLD_ACCENT, width=2, dash='dash'),
+                                                ))
+
+                                            # Add PB line
+                                            fig_athlete.add_hline(
+                                                y=pb,
+                                                line_dash="dot",
+                                                line_color="#FFD700",
+                                                annotation_text=f"PB: {pb_row['result']}",
+                                                annotation_position="right"
+                                            )
+
+                                            # Update layout
+                                            fig_athlete.update_layout(
+                                                title=f"{athlete_name} - {primary_event or 'All Events'} Performance",
+                                                xaxis_title="Date",
+                                                yaxis_title="Performance",
+                                                yaxis=dict(autorange='reversed') if not is_field else dict(),
+                                                plot_bgcolor='rgba(0,0,0,0)',
+                                                paper_bgcolor='rgba(0,0,0,0)',
+                                                font=dict(color='white'),
+                                                height=400,
+                                                showlegend=True,
+                                                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
+                                            )
+                                            fig_athlete.update_xaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.2)')
+                                            fig_athlete.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.2)')
+
+                                            st.plotly_chart(fig_athlete, use_container_width=True)
+
+                                # === COMPETITION RESULTS TABLE ===
+                                st.markdown("---")
                                 st.subheader("Competition Results")
 
                                 # Show best results per event - remove duplicates
