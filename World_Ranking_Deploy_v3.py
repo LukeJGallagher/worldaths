@@ -1340,6 +1340,140 @@ with tab5:
                     reserve_name = first_reserve.iloc[0]['Status']
                     st.caption(f"First reserve: {reserve_name} ({first_reserve.iloc[0]['Athlete']}) - {reserve_mark}")
 
+            # === WPA POINTS & PERFORMANCE ANALYSIS ===
+            st.markdown("---")
+            st.subheader("Performance Distribution Analysis")
+
+            # Parse WPA points from Column_6 (e.g., "1312p")
+            def parse_wpa_points(value):
+                if pd.isna(value):
+                    return None
+                match = re.search(r'(\d+)p', str(value), re.IGNORECASE)
+                return int(match.group(1)) if match else None
+
+            # Parse numeric performance from Details
+            def parse_numeric_performance(detail):
+                if pd.isna(detail):
+                    return None
+                # Look for time (e.g., "10.72", "1:59.00") or distance
+                match = re.search(r'^([\d:.]+)', str(detail))
+                if match:
+                    time_str = match.group(1)
+                    try:
+                        if ':' in time_str:
+                            parts = time_str.split(':')
+                            if len(parts) == 2:
+                                return float(parts[0]) * 60 + float(parts[1])
+                        return float(time_str)
+                    except:
+                        return None
+                return None
+
+            # Add parsed columns
+            event_data_analysis = event_data.copy()
+            if 'Column_6' in event_data_analysis.columns:
+                event_data_analysis['WPA_Points'] = event_data_analysis['Column_6'].apply(parse_wpa_points)
+            event_data_analysis['Numeric_Mark'] = event_data_analysis['Details'].apply(parse_numeric_performance)
+
+            # Only show for qualified athletes
+            qual_for_analysis = event_data_analysis[event_data_analysis['Qualification_Status'].isin(
+                ['Qualified_by_Entry_Standard', 'In_World_Rankings_quota', 'Qualified_by_Wild_Card']
+            )]
+
+            # Performance statistics
+            if not qual_for_analysis.empty and 'Numeric_Mark' in qual_for_analysis.columns:
+                marks_valid = qual_for_analysis.dropna(subset=['Numeric_Mark'])
+
+                if not marks_valid.empty:
+                    # Determine if it's a track event (lower is better) or field event (higher is better)
+                    is_track = any(x in selected_event_qual.lower() for x in ['metres', 'meter', 'hurdles', 'steeplechase', 'marathon', 'walk'])
+
+                    stat_cols = st.columns(5)
+                    with stat_cols[0]:
+                        best = marks_valid['Numeric_Mark'].min() if is_track else marks_valid['Numeric_Mark'].max()
+                        st.metric("Best Qualifier", f"{best:.2f}")
+                    with stat_cols[1]:
+                        worst = marks_valid['Numeric_Mark'].max() if is_track else marks_valid['Numeric_Mark'].min()
+                        st.metric("Last Qualifier", f"{worst:.2f}")
+                    with stat_cols[2]:
+                        st.metric("Average", f"{marks_valid['Numeric_Mark'].mean():.2f}")
+                    with stat_cols[3]:
+                        st.metric("Median", f"{marks_valid['Numeric_Mark'].median():.2f}")
+                    with stat_cols[4]:
+                        st.metric("Std Dev", f"{marks_valid['Numeric_Mark'].std():.2f}")
+
+                    # Box plot of qualifying marks by route
+                    fig_box = go.Figure()
+
+                    route_colors = {
+                        'Qualified_by_Entry_Standard': TEAL_PRIMARY,
+                        'In_World_Rankings_quota': GOLD_ACCENT,
+                        'Qualified_by_Wild_Card': '#C0C0C0'
+                    }
+
+                    for route in ['Qualified_by_Entry_Standard', 'In_World_Rankings_quota', 'Qualified_by_Wild_Card']:
+                        route_data = marks_valid[marks_valid['Qualification_Status'] == route]
+                        if not route_data.empty:
+                            route_name = route.replace('_', ' ').replace('Qualified by ', '').replace('In World Rankings quota', 'World Ranking')
+                            fig_box.add_trace(go.Box(
+                                y=route_data['Numeric_Mark'],
+                                name=route_name,
+                                boxpoints='all',
+                                jitter=0.3,
+                                pointpos=0,
+                                marker_color=route_colors.get(route, GRAY_BLUE),
+                                text=route_data['Status'],
+                                hovertemplate="<b>%{text}</b><br>Mark: %{y:.2f}<extra></extra>"
+                            ))
+
+                    fig_box.update_layout(
+                        title=f"{selected_event_qual} - Qualifying Marks Distribution",
+                        yaxis_title="Mark (seconds or meters)",
+                        yaxis=dict(autorange='reversed') if is_track else dict(),
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        paper_bgcolor='rgba(0,0,0,0)',
+                        font=dict(color='white'),
+                        height=400,
+                        showlegend=True
+                    )
+                    st.plotly_chart(fig_box, use_container_width=True)
+
+            # WPA Points distribution (if available)
+            if 'WPA_Points' in qual_for_analysis.columns:
+                points_valid = qual_for_analysis.dropna(subset=['WPA_Points'])
+                if not points_valid.empty and len(points_valid) > 5:
+                    st.subheader("World Athletics Ranking Points")
+
+                    pts_cols = st.columns(4)
+                    with pts_cols[0]:
+                        st.metric("Highest Points", f"{points_valid['WPA_Points'].max():,.0f}")
+                    with pts_cols[1]:
+                        st.metric("Lowest Qualified", f"{points_valid['WPA_Points'].min():,.0f}")
+                    with pts_cols[2]:
+                        st.metric("Average", f"{points_valid['WPA_Points'].mean():,.0f}")
+                    with pts_cols[3]:
+                        st.metric("Median", f"{points_valid['WPA_Points'].median():,.0f}")
+
+                    # Histogram of WPA points
+                    fig_hist = go.Figure(data=[
+                        go.Histogram(
+                            x=points_valid['WPA_Points'],
+                            nbinsx=20,
+                            marker_color=TEAL_PRIMARY,
+                            opacity=0.75
+                        )
+                    ])
+                    fig_hist.update_layout(
+                        title="Distribution of WPA Ranking Points (Qualified Athletes)",
+                        xaxis_title="WPA Points",
+                        yaxis_title="Number of Athletes",
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        paper_bgcolor='rgba(0,0,0,0)',
+                        font=dict(color='white'),
+                        height=350
+                    )
+                    st.plotly_chart(fig_hist, use_container_width=True)
+
         st.markdown("---")
 
         # === COUNTRY ANALYSIS ===
