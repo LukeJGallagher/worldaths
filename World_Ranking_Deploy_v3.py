@@ -1285,9 +1285,12 @@ with tab2:
                                                                 except:
                                                                     return None
 
+                                                            # Determine if field event locally (in case is_field wasn't set in trend section)
+                                                            is_field_local = any(kw in (primary_event or '').lower() for kw in ['jump', 'vault', 'put', 'throw', 'discus', 'javelin', 'hammer', 'decathlon', 'heptathlon'])
+
                                                             # Filter to event
                                                             a1_event = athlete_results[athlete_results[event_col] == primary_event].copy() if event_col in athlete_results.columns else athlete_results.copy()
-                                                            a2_event = opponent_results[opponent_results[event_col] == primary_event].copy()
+                                                            a2_event = opponent_results[opponent_results[event_col] == primary_event].copy() if event_col in opponent_results.columns else opponent_results.copy()
 
                                                             a1_event['result_num'] = a1_event[result_col].apply(parse_h2h)
                                                             a2_event['result_num'] = a2_event[result_col].apply(parse_h2h)
@@ -1297,7 +1300,7 @@ with tab2:
 
                                                             if not a1_event.empty and not a2_event.empty:
                                                                 # Calculate stats
-                                                                if is_field:
+                                                                if is_field_local:
                                                                     a1_pb = a1_event['result_num'].max()
                                                                     a2_pb = a2_event['result_num'].max()
                                                                     a1_avg = a1_event['result_num'].mean()
