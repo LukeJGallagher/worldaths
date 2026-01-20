@@ -1238,6 +1238,118 @@ with tab2:
 
                                             st.plotly_chart(fig_athlete, use_container_width=True)
 
+                                # === HEAD-TO-HEAD COMPARISON ===
+                                st.markdown("---")
+                                with st.expander("Head-to-Head Comparison", expanded=False):
+                                    st.markdown(f"""
+                                    <p style='color: #ccc;'>Compare <strong style='color: {GOLD_ACCENT};'>{athlete_name}</strong> against another athlete in {primary_event or 'their primary event'}</p>
+                                    """, unsafe_allow_html=True)
+
+                                    if DATA_CONNECTOR_AVAILABLE and primary_event:
+                                        try:
+                                            # Get all athletes in same event for comparison
+                                            all_rankings = get_rankings_data()
+
+                                            if all_rankings is not None and not all_rankings.empty:
+                                                event_col = 'event' if 'event' in all_rankings.columns else 'Event Type'
+                                                competitor_col = 'competitor' if 'competitor' in all_rankings.columns else 'Name'
+
+                                                event_athletes = all_rankings[all_rankings[event_col] == primary_event][competitor_col].unique()
+                                                event_athletes = [a for a in event_athletes if str(a).upper() != athlete_name.upper()]
+                                                event_athletes = sorted(event_athletes)[:100]  # Limit for performance
+
+                                                if event_athletes:
+                                                    h2h_opponent = st.selectbox(
+                                                        "Select opponent to compare",
+                                                        event_athletes,
+                                                        key=f"h2h_opponent_{athlete_name}_{primary_event}"
+                                                    )
+
+                                                    if st.button("Compare", key=f"h2h_btn_{athlete_name}_{primary_event}"):
+                                                        # Get opponent data
+                                                        opponent_results = all_rankings[all_rankings[competitor_col].str.upper() == h2h_opponent.upper()]
+
+                                                        if not opponent_results.empty:
+                                                            # Parse results for both athletes
+                                                            result_col = 'result' if 'result' in all_rankings.columns else 'Score'
+
+                                                            def parse_h2h(val):
+                                                                if pd.isna(val):
+                                                                    return None
+                                                                val_str = str(val).strip()
+                                                                try:
+                                                                    if ':' in val_str:
+                                                                        parts = val_str.split(':')
+                                                                        return float(parts[0]) * 60 + float(parts[1])
+                                                                    return float(val_str)
+                                                                except:
+                                                                    return None
+
+                                                            # Filter to event
+                                                            a1_event = athlete_results[athlete_results[event_col] == primary_event].copy() if event_col in athlete_results.columns else athlete_results.copy()
+                                                            a2_event = opponent_results[opponent_results[event_col] == primary_event].copy()
+
+                                                            a1_event['result_num'] = a1_event[result_col].apply(parse_h2h)
+                                                            a2_event['result_num'] = a2_event[result_col].apply(parse_h2h)
+
+                                                            a1_event = a1_event.dropna(subset=['result_num'])
+                                                            a2_event = a2_event.dropna(subset=['result_num'])
+
+                                                            if not a1_event.empty and not a2_event.empty:
+                                                                # Calculate stats
+                                                                if is_field:
+                                                                    a1_pb = a1_event['result_num'].max()
+                                                                    a2_pb = a2_event['result_num'].max()
+                                                                    a1_avg = a1_event['result_num'].mean()
+                                                                    a2_avg = a2_event['result_num'].mean()
+                                                                    pb_winner = athlete_name if a1_pb > a2_pb else h2h_opponent
+                                                                else:
+                                                                    a1_pb = a1_event['result_num'].min()
+                                                                    a2_pb = a2_event['result_num'].min()
+                                                                    a1_avg = a1_event['result_num'].mean()
+                                                                    a2_avg = a2_event['result_num'].mean()
+                                                                    pb_winner = athlete_name if a1_pb < a2_pb else h2h_opponent
+
+                                                                # Display comparison
+                                                                h2h_cols = st.columns(3)
+
+                                                                with h2h_cols[0]:
+                                                                    st.markdown(f"""
+                                                                    <div style="background: {TEAL_PRIMARY}; padding: 1rem; border-radius: 8px; text-align: center;">
+                                                                        <p style="color: white; font-weight: bold; margin: 0; font-size: 0.9rem;">{athlete_name}</p>
+                                                                        <p style="color: rgba(255,255,255,0.9); margin: 0.3rem 0; font-size: 1.3rem; font-weight: bold;">PB: {a1_pb:.2f}</p>
+                                                                        <p style="color: rgba(255,255,255,0.7); margin: 0; font-size: 0.85rem;">Avg: {a1_avg:.2f}</p>
+                                                                    </div>
+                                                                    """, unsafe_allow_html=True)
+
+                                                                with h2h_cols[1]:
+                                                                    st.markdown(f"""
+                                                                    <div style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px; text-align: center;">
+                                                                        <p style="color: #aaa; margin: 0; font-size: 0.85rem;">Comparison</p>
+                                                                        <p style="color: white; font-size: 1.5rem; font-weight: bold; margin: 0.3rem 0;">VS</p>
+                                                                        <p style="color: {GOLD_ACCENT}; margin: 0; font-size: 0.85rem;">PB: {pb_winner}</p>
+                                                                    </div>
+                                                                    """, unsafe_allow_html=True)
+
+                                                                with h2h_cols[2]:
+                                                                    st.markdown(f"""
+                                                                    <div style="background: {GOLD_ACCENT}; padding: 1rem; border-radius: 8px; text-align: center;">
+                                                                        <p style="color: white; font-weight: bold; margin: 0; font-size: 0.9rem;">{h2h_opponent}</p>
+                                                                        <p style="color: rgba(255,255,255,0.9); margin: 0.3rem 0; font-size: 1.3rem; font-weight: bold;">PB: {a2_pb:.2f}</p>
+                                                                        <p style="color: rgba(255,255,255,0.7); margin: 0; font-size: 0.85rem;">Avg: {a2_avg:.2f}</p>
+                                                                    </div>
+                                                                    """, unsafe_allow_html=True)
+                                                            else:
+                                                                st.warning("Insufficient data for comparison")
+                                                        else:
+                                                            st.warning("Could not find opponent data")
+                                                else:
+                                                    st.info("No other athletes found in this event for comparison")
+                                        except Exception as e:
+                                            st.warning(f"H2H comparison error: {str(e)[:100]}")
+                                    else:
+                                        st.info("Select an athlete with competition data to enable H2H comparison")
+
                                 # === COMPETITION RESULTS TABLE ===
                                 st.markdown("---")
                                 st.subheader("Competition Results")
