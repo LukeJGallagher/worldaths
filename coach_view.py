@@ -704,17 +704,39 @@ def show_competitor_watch(df: pd.DataFrame):
         )
 
     with col2:
-        gender_opts = sorted(df['gender'].dropna().unique().tolist())
+        # Handle different column names for gender
+        gender_col = 'gender' if 'gender' in df.columns else ('Gender' if 'Gender' in df.columns else None)
+        if gender_col:
+            gender_opts = sorted(df[gender_col].dropna().unique().tolist())
+        else:
+            gender_opts = ['Men', 'Women']
         selected_gender = st.selectbox("Gender", gender_opts, key="watch_gender")
 
     with col3:
-        gender_filtered = df[df['gender'] == selected_gender]
-        event_opts = sorted(gender_filtered['event'].dropna().unique().tolist())
+        # Handle different column names for event
+        event_col = 'event' if 'event' in df.columns else ('Event' if 'Event' in df.columns else ('Event Type' if 'Event Type' in df.columns else None))
+
+        if event_col is None:
+            st.error("No Event column found in data. Available columns: " + ", ".join(df.columns.tolist()[:10]))
+            return
+
+        if gender_col:
+            gender_filtered = df[df[gender_col] == selected_gender]
+        else:
+            gender_filtered = df
+
+        event_opts = sorted(gender_filtered[event_col].dropna().unique().tolist())
         selected_event = st.selectbox("Event", event_opts, key="watch_event")
 
     if not selected_event:
         st.info("Please select an event.")
         return
+
+    # Normalize column names for rest of function
+    if 'event' not in df.columns and event_col:
+        df = df.rename(columns={event_col: 'event'})
+    if 'gender' not in df.columns and gender_col:
+        df = df.rename(columns={gender_col: 'gender'})
 
     # Championship info
     champ_info = UPCOMING_CHAMPIONSHIPS.get(selected_championship, {})

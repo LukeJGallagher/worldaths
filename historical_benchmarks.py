@@ -113,6 +113,15 @@ def normalize_event_name(event_name: str) -> str:
         'marathon': 'Marathon',
         '20-kilometres-walk': '20km Walk',
         '50-kilometres-walk': '50km Walk',
+        # Relay events
+        '4x100-metres-relay': '4x100m Relay',
+        '4x400-metres-relay': '4x400m Relay',
+        '4x100m relay': '4x100m Relay',
+        '4x400m relay': '4x400m Relay',
+        '4x100m': '4x100m Relay',
+        '4x400m': '4x400m Relay',
+        '4 x 100 metres relay': '4x100m Relay',
+        '4 x 400 metres relay': '4x400m Relay',
     }
 
     return wa_to_standard.get(event_lower, event_name)
@@ -152,6 +161,9 @@ def get_default_benchmarks(event: str, gender: str) -> Dict[str, Dict]:
             'Decathlon': {'medal': 8700, 'final': 8400, 'semi': None, 'heat': None},
             'Marathon': {'medal': 7380, 'final': 7500, 'semi': None, 'heat': None},  # ~2:03:00
             '20km Walk': {'medal': 4680, 'final': 4800, 'semi': None, 'heat': None},  # ~1:18:00
+            # Relay events - times based on World/Asian Games historical data
+            '4x100m Relay': {'medal': 37.80, 'final': 38.30, 'semi': None, 'heat': 38.80},
+            '4x400m Relay': {'medal': 178.50, 'final': 180.50, 'semi': None, 'heat': 183.00},  # ~2:58.50
         },
         'women': {
             '100m': {'medal': 10.85, 'final': 11.02, 'semi': 11.15, 'heat': 11.30},
@@ -175,6 +187,9 @@ def get_default_benchmarks(event: str, gender: str) -> Dict[str, Dict]:
             'Heptathlon': {'medal': 6700, 'final': 6400, 'semi': None, 'heat': None},
             'Marathon': {'medal': 8100, 'final': 8280, 'semi': None, 'heat': None},  # ~2:15:00
             '20km Walk': {'medal': 5280, 'final': 5400, 'semi': None, 'heat': None},  # ~1:28:00
+            # Relay events
+            '4x100m Relay': {'medal': 41.50, 'final': 42.20, 'semi': None, 'heat': 43.00},
+            '4x400m Relay': {'medal': 198.00, 'final': 202.00, 'semi': None, 'heat': 206.00},  # ~3:18.00
         }
     }
 
