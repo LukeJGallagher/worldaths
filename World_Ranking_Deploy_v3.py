@@ -40,6 +40,17 @@ try:
 except ImportError:
     DATA_CONNECTOR_AVAILABLE = False
 
+# Import analytics helpers
+try:
+    from analytics_helpers import (
+        calculate_consistency_score, calculate_near_miss,
+        head_to_head_comparison, country_comparison,
+        parse_result_to_seconds, is_field_event, get_regional_rivals
+    )
+    ANALYTICS_HELPERS_AVAILABLE = True
+except ImportError:
+    ANALYTICS_HELPERS_AVAILABLE = False
+
 ###################################
 # Team Saudi Brand Colors
 ###################################
@@ -1130,6 +1141,37 @@ with tab2:
                                                 <p style="color: white; font-size: 1.2rem; font-weight: bold; margin: 0;">{avg_result:.2f}</p>
                                             </div>
                                             """, unsafe_allow_html=True)
+
+                                        # === CONSISTENCY SCORE ===
+                                        if ANALYTICS_HELPERS_AVAILABLE and len(athlete_results_copy) >= 5:
+                                            recent_perfs = athlete_results_copy.tail(10)['result_numeric'].tolist()
+                                            consistency = calculate_consistency_score(recent_perfs, is_field)
+
+                                            if consistency and consistency.get('score') is not None:
+                                                st.markdown("---")
+                                                cons_cols = st.columns([2, 1, 1])
+                                                with cons_cols[0]:
+                                                    st.markdown(f"""
+                                                    <div style="background: {consistency['color']}; padding: 1rem; border-radius: 8px;">
+                                                        <p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 0.85rem;">Consistency Score</p>
+                                                        <p style="color: white; font-size: 2rem; font-weight: bold; margin: 0;">{consistency['score']}/100</p>
+                                                        <p style="color: rgba(255,255,255,0.9); margin: 0.25rem 0 0 0; font-size: 0.9rem;">{consistency.get('interpretation', consistency.get('rating', ''))}</p>
+                                                    </div>
+                                                    """, unsafe_allow_html=True)
+                                                with cons_cols[1]:
+                                                    st.markdown(f"""
+                                                    <div style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px; text-align: center;">
+                                                        <p style="color: #aaa; margin: 0; font-size: 0.75rem;">Std Deviation</p>
+                                                        <p style="color: white; font-size: 1.2rem; font-weight: bold; margin: 0;">{consistency.get('std_dev', consistency.get('std', 'N/A'))}</p>
+                                                    </div>
+                                                    """, unsafe_allow_html=True)
+                                                with cons_cols[2]:
+                                                    st.markdown(f"""
+                                                    <div style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px; text-align: center;">
+                                                        <p style="color: #aaa; margin: 0; font-size: 0.75rem;">CV %</p>
+                                                        <p style="color: white; font-size: 1.2rem; font-weight: bold; margin: 0;">{consistency['cv']}%</p>
+                                                    </div>
+                                                    """, unsafe_allow_html=True)
 
                                         # === PERFORMANCE PROGRESSION CHART ===
                                         st.markdown("---")
