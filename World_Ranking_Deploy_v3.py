@@ -1740,6 +1740,173 @@ with tab5:
                 if ksa_total > 0:
                     st.info(f"KSA has {ksa_total} qualified athletes")
 
+        # === NEAR MISS ANALYSIS ===
+        st.markdown("---")
+        st.subheader("Near Miss Analysis - Athletes Close to Standards")
+        st.markdown(f"""
+        <p style='color: #ccc; font-size: 0.9em;'>
+        KSA athletes within <strong style="color: {GOLD_ACCENT};">5%</strong> of qualification standards who could break through with focused training.
+        </p>
+        """, unsafe_allow_html=True)
+
+        # Get KSA athletes from master data
+        if DATA_CONNECTOR_AVAILABLE:
+            try:
+                ksa_rankings = get_ksa_rankings()
+                if ksa_rankings is not None and not ksa_rankings.empty:
+                    near_miss_data = []
+
+                    # Tokyo 2025 entry standards (in seconds for track, meters for field)
+                    tokyo_standards = {
+                        '100m': 10.00, '100-metres': 10.00, '100 metres': 10.00,
+                        '200m': 20.24, '200-metres': 20.24, '200 metres': 20.24,
+                        '400m': 44.90, '400-metres': 44.90, '400 metres': 44.90,
+                        '800m': 103.50, '800-metres': 103.50, '800 metres': 103.50,  # 1:43.50
+                        '1500m': 213.50, '1500-metres': 213.50, '1500 metres': 213.50,  # 3:33.50
+                        'long-jump': 8.27, 'long jump': 8.27,
+                        'high-jump': 2.33, 'high jump': 2.33,
+                        'triple-jump': 17.22, 'triple jump': 17.22,
+                        'shot-put': 21.10, 'shot put': 21.10,
+                        'discus-throw': 66.00, 'discus throw': 66.00,
+                        'javelin-throw': 85.20, 'javelin throw': 85.20
+                    }
+
+                    # Helper functions for near miss calculation
+                    def parse_result_to_numeric(result_str, event_name):
+                        """Parse result string to numeric value (seconds for track, meters for field)."""
+                        if pd.isna(result_str):
+                            return None
+                        result_str = str(result_str).strip()
+                        try:
+                            # Handle time formats like "1:43.50" or "10.72"
+                            if ':' in result_str:
+                                parts = result_str.split(':')
+                                if len(parts) == 2:
+                                    return float(parts[0]) * 60 + float(parts[1])
+                                elif len(parts) == 3:
+                                    return float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+                            # Handle simple numeric values
+                            return float(result_str.replace('m', '').replace('s', '').strip())
+                        except (ValueError, AttributeError):
+                            return None
+
+                    def is_field_event_check(event_name):
+                        """Check if event is a field event (higher is better)."""
+                        field_events = ['jump', 'put', 'throw', 'shot', 'discus', 'javelin', 'hammer', 'pole vault']
+                        return any(fe in str(event_name).lower() for fe in field_events)
+
+                    def calculate_near_miss_pct(pb, standard, is_field):
+                        """Calculate percentage gap to standard."""
+                        if pb is None or standard is None or standard == 0:
+                            return None, None
+                        if is_field:
+                            # Field events: higher is better
+                            gap = standard - pb
+                            pct = (gap / standard) * 100
+                        else:
+                            # Track events: lower is better
+                            gap = pb - standard
+                            pct = (gap / standard) * 100
+                        return gap, pct
+
+                    # Determine event column name
+                    event_col = 'event' if 'event' in ksa_rankings.columns else 'Event Type' if 'Event Type' in ksa_rankings.columns else None
+                    result_col = 'result' if 'result' in ksa_rankings.columns else 'Result' if 'Result' in ksa_rankings.columns else None
+                    athlete_col = 'competitor' if 'competitor' in ksa_rankings.columns else 'Competitor' if 'Competitor' in ksa_rankings.columns else None
+
+                    if event_col and result_col and athlete_col:
+                        # Group by athlete and event
+                        for (athlete, event), group in ksa_rankings.groupby([athlete_col, event_col]):
+                            # Parse results and get PB
+                            results = group[result_col].apply(lambda x: parse_result_to_numeric(x, event)).dropna()
+                            if results.empty:
+                                continue
+
+                            is_field = is_field_event_check(event)
+                            pb = results.max() if is_field else results.min()
+
+                            # Normalize event name for lookup
+                            event_lower = str(event).lower()
+                            event_normalized = event_lower.replace(' ', '-').replace('metres', 'm')
+
+                            # Try different variations to find the standard
+                            standard = tokyo_standards.get(event_normalized) or tokyo_standards.get(event_lower) or tokyo_standards.get(event_lower.replace('-', ' '))
+
+                            if standard:
+                                gap, pct = calculate_near_miss_pct(pb, standard, is_field)
+
+                                if pct is not None and pct > 0 and pct <= 5.0:
+                                    # Determine status and color based on percentage
+                                    if pct <= 1.0:
+                                        status = "Very Close (<1%)"
+                                        color = TEAL_PRIMARY
+                                    elif pct <= 2.5:
+                                        status = f"Close ({pct:.1f}%)"
+                                        color = TEAL_LIGHT
+                                    else:
+                                        status = f"Within Reach ({pct:.1f}%)"
+                                        color = GOLD_ACCENT
+
+                                    near_miss_data.append({
+                                        'Athlete': athlete,
+                                        'Event': event,
+                                        'PB': pb,
+                                        'Standard': standard,
+                                        'Gap': gap,
+                                        'Percentage': pct,
+                                        'Status': status,
+                                        'Color': color
+                                    })
+
+                    if near_miss_data:
+                        # Sort by closest to standard (lowest percentage)
+                        near_miss_df = pd.DataFrame(near_miss_data).sort_values('Percentage')
+
+                        st.success(f"Found **{len(near_miss_df)} KSA athletes** within 5% of major championship standards!")
+
+                        # Display as cards
+                        for _, row in near_miss_df.head(10).iterrows():
+                            # Format display values
+                            if row['PB'] >= 60:  # Time in seconds, convert to mm:ss
+                                mins = int(row['PB'] // 60)
+                                secs = row['PB'] % 60
+                                pb_display = f"{mins}:{secs:05.2f}"
+                            else:
+                                pb_display = f"{row['PB']:.2f}"
+
+                            if row['Standard'] >= 60:
+                                mins = int(row['Standard'] // 60)
+                                secs = row['Standard'] % 60
+                                std_display = f"{mins}:{secs:05.2f}"
+                            else:
+                                std_display = f"{row['Standard']:.2f}"
+
+                            gap_display = f"{abs(row['Gap']):.2f}"
+
+                            st.markdown(f"""
+                            <div style="background: linear-gradient(135deg, rgba(0,0,0,0.5) 0%, rgba(0,0,0,0.3) 100%);
+                                        border-left: 4px solid {row['Color']}; padding: 1rem; margin: 0.5rem 0; border-radius: 0 8px 8px 0;">
+                                <div style="display: flex; justify-content: space-between; align-items: center;">
+                                    <div>
+                                        <strong style="color: white; font-size: 1.1rem;">{row['Athlete']}</strong>
+                                        <p style="color: #aaa; margin: 0.25rem 0 0 0;">{row['Event']}</p>
+                                    </div>
+                                    <div style="text-align: right;">
+                                        <p style="color: {row['Color']}; font-weight: bold; margin: 0; font-size: 1.2rem;">{row['Status']}</p>
+                                        <p style="color: #aaa; margin: 0; font-size: 0.85rem;">PB: {pb_display} | Std: {std_display} | Gap: {gap_display}</p>
+                                    </div>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                    else:
+                        st.info("No KSA athletes currently within 5% of major championship standards.")
+                else:
+                    st.info("No KSA rankings data available for near miss analysis.")
+            except Exception as e:
+                st.warning(f"Near miss analysis unavailable: {str(e)[:100]}")
+        else:
+            st.info("Data connector not available for near miss analysis.")
+
     else:
         st.warning("No qualification data found. Data may still be loading from Azure.")
 
