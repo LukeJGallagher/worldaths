@@ -721,6 +721,12 @@ except:
 # Load athlete profiles (smaller dataset - OK to load upfront)
 athletes_df, rankings_df, breakdown_df, pbs_df, progression_df = load_athlete_profiles()
 
+def paginate_dataframe(df: pd.DataFrame, page_size: int = 100, page_num: int = 0) -> pd.DataFrame:
+    """Return a page of the dataframe for display."""
+    start_idx = page_num * page_size
+    end_idx = start_idx + page_size
+    return df.iloc[start_idx:end_idx]
+
 # Load Road to Tokyo and qualification data (lazy load)
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def get_road_to_df():
@@ -1430,34 +1436,49 @@ with tab2:
 # Tab 3: Combined Rankings
 ###################################
 with tab3:
-    st.header('Combined Rankings')
-    gender = st.selectbox('Select Gender', ['All', 'Men', 'Women'], index=1, key="combined_gender")
+    st.header("Combined Global Rankings")
 
-    # Lazy load rankings only when this tab is accessed
-    with st.spinner("Loading rankings..."):
-        if gender == 'Men':
-            data = load_men_rankings()
-        elif gender == 'Women':
-            data = load_women_rankings()
-        else:
-            men_rankings = load_men_rankings()
-            women_rankings = load_women_rankings()
-            data = pd.concat([men_rankings, women_rankings])
+    # Lazy load the large rankings data
+    with st.spinner("Loading rankings data..."):
+        men_df = load_men_rankings()
+        women_df = load_women_rankings()
 
-    if not data.empty and 'Event Type' in data.columns:
-        events = sorted(data['Event Type'].dropna().unique())
-        selected_event_rank = st.selectbox("Select Event", options=events, key="combined_event_select")
-        data = data[data['Event Type'] == selected_event_rank]
+    # Gender filter
+    gender_filter = st.radio("Select Gender", ['Men', 'Women'], horizontal=True, key="combined_gender")
 
-        if not data.empty and 'Rank' in data.columns and 'Score' in data.columns:
-            min_rank, max_rank = int(data['Rank'].min()), int(data['Rank'].max())
-            min_score, max_score = int(data['Score'].min()), int(data['Score'].max())
+    display_df = men_df if gender_filter == 'Men' else women_df
 
-            selected_rank = st.slider("Select Rank Range", min_rank, max_rank, (min_rank, min(50, max_rank)))
+    if display_df is not None and not display_df.empty:
+        # Event filter
+        event_col = 'Event Type' if 'Event Type' in display_df.columns else 'event'
+        events = sorted(display_df[event_col].dropna().unique()) if event_col in display_df.columns else []
+        selected_event = st.selectbox("Filter by Event", ['All Events'] + list(events), key="combined_event")
 
-            filtered = data[data['Rank'].between(*selected_rank)]
-            filtered = filtered.drop_duplicates()
-            st.dataframe(filtered.reset_index(drop=True), use_container_width=True)
+        if selected_event != 'All Events':
+            display_df = display_df[display_df[event_col] == selected_event]
+
+        # Pagination
+        total_rows = len(display_df)
+        page_size = 100
+        total_pages = max(1, (total_rows // page_size) + (1 if total_rows % page_size > 0 else 0))
+
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            page_num = st.number_input(
+                f"Page (1-{total_pages})",
+                min_value=1,
+                max_value=total_pages,
+                value=1,
+                key="rankings_page"
+            ) - 1  # 0-indexed
+
+        st.caption(f"Showing {page_num * page_size + 1}-{min((page_num + 1) * page_size, total_rows)} of {total_rows:,} records")
+
+        # Display paginated data
+        page_df = paginate_dataframe(display_df, page_size, page_num)
+        st.dataframe(page_df, use_container_width=True, hide_index=True)
+    else:
+        st.warning("No rankings data available")
 
 ###################################
 # Tab 4: Saudi Athletes Rankings
