@@ -22,6 +22,14 @@ except ImportError:
     CHATBOT_CONTEXT_AVAILABLE = False
     get_context_builder = None
 
+# Import Document RAG for AI Analyst
+try:
+    from document_rag import get_rag, get_status as get_rag_status
+    DOCUMENT_RAG_AVAILABLE = True
+except ImportError:
+    DOCUMENT_RAG_AVAILABLE = False
+    get_rag = None
+
 # Import Coach View module
 try:
     from coach_view import render_coach_view
@@ -50,6 +58,16 @@ try:
     ANALYTICS_HELPERS_AVAILABLE = True
 except ImportError:
     ANALYTICS_HELPERS_AVAILABLE = False
+
+# Import Race Intelligence module
+try:
+    from race_intelligence import (
+        get_competitor_form_cards, build_race_preview,
+        get_career_milestones, get_standards_progression
+    )
+    RACE_INTELLIGENCE_AVAILABLE = True
+except ImportError:
+    RACE_INTELLIGENCE_AVAILABLE = False
 
 ###################################
 # Team Saudi Brand Colors
@@ -197,14 +215,15 @@ PROJECT_EAST_TIMELINE = {
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 FREE_MODELS = {
-    'google/gemma-3-27b-it:free': 'Gemma 3 27B (Recommended)',
+    'meta-llama/llama-3.2-3b-instruct:free': 'Llama 3.2 3B (Fastest)',
+    'google/gemma-3-27b-it:free': 'Gemma 3 27B (Balanced)',
     'google/gemini-2.0-flash-exp:free': 'Gemini 2.0 Flash (Google)',
-    'meta-llama/llama-3.3-70b-instruct:free': 'Llama 3.3 70B (Best)',
-    'meta-llama/llama-3.2-3b-instruct:free': 'Llama 3.2 3B (Fast)',
+    'meta-llama/llama-3.3-70b-instruct:free': 'Llama 3.3 70B (Best Quality)',
     'qwen/qwen2.5-vl-7b-instruct:free': 'Qwen 2.5 VL 7B (Multilingual)',
-    'nousresearch/hermes-3-llama-3.1-405b:free': 'Hermes 3 405B (Advanced)',
+    'deepseek/deepseek-r1:free': 'DeepSeek R1 (Reasoning)',
 }
-DEFAULT_MODEL = 'google/gemma-3-27b-it:free'
+# Default to fastest model for better UX
+DEFAULT_MODEL = 'meta-llama/llama-3.2-3b-instruct:free'
 
 ATHLETICS_KNOWLEDGE = """
 You are an elite sports analyst specializing in athletics (track and field) for Team Saudi.
@@ -246,94 +265,252 @@ def get_openrouter_key():
 
 
 class AthleticsContextBuilder:
-    """Builds lightweight context for RAG without heavy data loading."""
+    """
+    RAG-style context builder that retrieves relevant data from the database.
 
-    # Pre-computed static context about the database
-    STATIC_CONTEXT = """
-DATABASE SUMMARY:
-- Master rankings: 2.3M+ performance records from World Athletics
-- KSA athlete profiles: 152 Saudi athletes with PBs and rankings
-- Benchmarks: Medal standards for Olympics, World Champs, Asian Games, Arab Champs
-- Events covered: All track & field events (sprints, distance, jumps, throws, combined)
-- Years: 2015-2025
+    Searches:
+    - KSA athlete profiles and rankings
+    - Benchmark/qualification standards
+    - Historical performance data
 
-KEY SAUDI EVENTS (by athlete count):
-- 100m, 200m, 400m (sprints)
-- Long Jump, Triple Jump, High Jump
-- Shot Put, Discus, Javelin
-- 800m, 1500m (middle distance)
-
-QUALIFICATION STANDARDS (2024 World Champs examples):
-- Men's 100m: 10.00s (entry), sub-10.00 for finals
-- Men's 400m: 44.50s (entry)
-- Men's Long Jump: 8.15m (entry)
-- Women's 100m: 11.07s (entry)
-
-The dashboard contains detailed athlete profiles, head-to-head comparisons,
-gap analysis to qualification standards, and historical performance trends.
-"""
+    Returns grounded context for LLM responses.
+    """
 
     def __init__(self):
         self.data_available = DATA_CONNECTOR_AVAILABLE
-        self._ksa_cache = None
+        self._ksa_data_cache = None
+        self._benchmarks_cache = None
 
-    def get_ksa_summary(self) -> str:
-        """Get cached summary of KSA athletes (lightweight)."""
-        if self._ksa_cache:
-            return self._ksa_cache
+    def _get_ksa_data(self):
+        """Load and cache KSA rankings data."""
+        if self._ksa_data_cache is not None:
+            return self._ksa_data_cache
 
         if not self.data_available:
-            return "KSA athlete data available in dashboard tabs."
+            return None
 
         try:
-            # Use cached function from Streamlit
-            df = get_ksa_athletes()
-            if df is None or df.empty:
-                return "KSA athlete profiles available in Athlete Profiles tab."
-
-            summary_parts = [f"KSA Athletes: {len(df)} profiles in database"]
-
-            if 'discipline' in df.columns:
-                events = df['discipline'].value_counts().head(5)
-                summary_parts.append(f"Top events: {', '.join([f'{e} ({c})' for e, c in events.items()])}")
-
-            self._ksa_cache = "\n".join(summary_parts)
-            return self._ksa_cache
+            df = get_ksa_rankings()
+            if df is not None and not df.empty:
+                self._ksa_data_cache = df
+            return self._ksa_data_cache
         except Exception:
-            return "KSA athlete data available in dashboard tabs."
+            return None
 
-    def build_context(self, query: str) -> str:
-        """Build lightweight context without loading large datasets."""
-        context_parts = [self.STATIC_CONTEXT]
+    def _get_benchmarks(self):
+        """Load and cache benchmark standards."""
+        if self._benchmarks_cache is not None:
+            return self._benchmarks_cache
+
+        if not self.data_available:
+            return None
+
+        try:
+            df = get_benchmarks_data()
+            if df is not None and not df.empty:
+                self._benchmarks_cache = df
+            return self._benchmarks_cache
+        except Exception:
+            return None
+
+    def _search_athletes(self, query: str, limit: int = 10) -> str:
+        """Search for athletes matching the query."""
+        df = self._get_ksa_data()
+        if df is None or df.empty:
+            return ""
 
         query_lower = query.lower()
+        results = []
 
-        # Add KSA-specific context only for KSA queries
-        if any(term in query_lower for term in ['ksa', 'saudi', 'our', 'team']):
-            context_parts.append(self.get_ksa_summary())
+        # Determine column names
+        athlete_col = next((c for c in ['competitor', 'Competitor', 'full_name'] if c in df.columns), None)
+        event_col = next((c for c in ['event', 'Event'] if c in df.columns), None)
+        result_col = next((c for c in ['result', 'Result'] if c in df.columns), None)
+        date_col = next((c for c in ['date', 'Date'] if c in df.columns), None)
+        venue_col = next((c for c in ['venue', 'Venue'] if c in df.columns), None)
 
-        # Add event-specific hints
-        event_hints = {
-            '100m': "100m: World class ~9.80-10.00s, Asian level ~10.00-10.20s",
-            '200m': "200m: World class ~19.70-20.00s, Asian level ~20.00-20.50s",
-            '400m': "400m: World class ~43.50-44.50s, Asian level ~44.50-45.50s",
-            '800m': "800m: World class ~1:43-1:45, Asian level ~1:45-1:47",
-            '1500m': "1500m: World class ~3:28-3:32, Asian level ~3:32-3:38",
-            'long jump': "Long Jump: World class 8.20-8.50m, Asian level 8.00-8.20m",
-            'high jump': "High Jump: World class 2.30-2.40m, Asian level 2.25-2.32m",
-            'shot put': "Shot Put: World class 21-23m, Asian level 19-21m",
+        if not athlete_col:
+            return ""
+
+        # Extract athlete names from query
+        athlete_matches = df[df[athlete_col].str.lower().str.contains(query_lower, na=False)]
+
+        # Also check for event-specific queries
+        event_keywords = ['100m', '200m', '400m', '800m', '1500m', '5000m', '10000m',
+                         'hurdles', 'jump', 'throw', 'shot', 'discus', 'javelin',
+                         'hammer', 'pole vault', 'relay', 'marathon', 'walk']
+
+        event_match = None
+        for kw in event_keywords:
+            if kw in query_lower:
+                event_match = kw
+                break
+
+        if event_match and event_col:
+            event_data = df[df[event_col].str.lower().str.contains(event_match, na=False)]
+            if not event_data.empty:
+                # Group by athlete and get best result
+                grouped = event_data.groupby(athlete_col)
+                for athlete, group in list(grouped)[:limit]:
+                    if result_col and athlete_col:
+                        best = group[result_col].iloc[0] if not group.empty else 'N/A'
+                        recent_date = group[date_col].max() if date_col and date_col in group.columns else 'N/A'
+                        results.append(f"- {athlete}: {best} ({event_match}, {recent_date})")
+
+        elif not athlete_matches.empty:
+            # Return athlete-specific data
+            for athlete in athlete_matches[athlete_col].unique()[:limit]:
+                athlete_data = df[df[athlete_col] == athlete]
+                if event_col and result_col:
+                    events = athlete_data.groupby(event_col).agg({
+                        result_col: 'first'
+                    }).head(5)
+                    for event, row in events.iterrows():
+                        results.append(f"- {athlete}: {event} - {row[result_col]}")
+
+        if results:
+            return "KSA ATHLETE DATA:\n" + "\n".join(results[:15])
+        return ""
+
+    def _search_benchmarks(self, query: str) -> str:
+        """Search for relevant benchmark standards."""
+        df = self._get_benchmarks()
+        if df is None or df.empty:
+            return ""
+
+        query_lower = query.lower()
+        results = []
+
+        # Check for event mentions
+        event_keywords = {
+            '100m': ['100m', '100 metres', '100-metres'],
+            '200m': ['200m', '200 metres', '200-metres'],
+            '400m': ['400m', '400 metres', '400-metres'],
+            '800m': ['800m', '800 metres', '800-metres'],
+            '1500m': ['1500m', '1500 metres', '1500-metres'],
+            'long jump': ['long jump', 'long-jump'],
+            'high jump': ['high jump', 'high-jump'],
+            'triple jump': ['triple jump', 'triple-jump'],
+            'shot put': ['shot put', 'shot-put'],
+            'discus': ['discus throw', 'discus-throw'],
+            'javelin': ['javelin throw', 'javelin-throw'],
+            'pole vault': ['pole vault', 'pole-vault'],
         }
 
-        for event, hint in event_hints.items():
-            if event in query_lower:
-                context_parts.append(hint)
+        matched_event = None
+        for event, variations in event_keywords.items():
+            if any(v in query_lower for v in variations) or event in query_lower:
+                matched_event = event
                 break
+
+        # Determine column names
+        event_col = next((c for c in ['Event', 'event', 'Event Type'] if c in df.columns), None)
+
+        if matched_event and event_col:
+            event_data = df[df[event_col].str.lower().str.contains(matched_event, na=False)]
+            if not event_data.empty:
+                results.append(f"\nBENCHMARK STANDARDS for {matched_event.upper()}:")
+                for _, row in event_data.head(5).iterrows():
+                    row_info = []
+                    for col in ['Gold Standard', 'Silver Standard', 'Bronze Standard', 'Final Standard (8th)', 'Gender']:
+                        if col in row.index and pd.notna(row[col]):
+                            row_info.append(f"{col}: {row[col]}")
+                    if row_info:
+                        results.append("  " + ", ".join(row_info))
+
+        # Check for qualification-related queries
+        if any(term in query_lower for term in ['qualify', 'qualification', 'standard', 'entry', 'medal']):
+            # Return general qualification info
+            if df is not None and not df.empty:
+                results.append("\nQUALIFICATION STANDARDS AVAILABLE:")
+                if event_col:
+                    events = df[event_col].unique()[:10]
+                    results.append(f"Events with standards: {', '.join(str(e) for e in events)}")
+
+        return "\n".join(results) if results else ""
+
+    def _get_static_context(self) -> str:
+        """Return static knowledge about the database."""
+        return """
+DATABASE SUMMARY:
+- Master rankings: 2.3M+ performance records from World Athletics
+- KSA athlete profiles: 152 Saudi athletes with PBs and rankings
+- Benchmarks: Medal standards for Olympics, World Champs, Asian Games
+- Events: All track & field events (sprints, distance, jumps, throws)
+
+ANSWER GUIDELINES:
+- Cite specific data when available (e.g., "Mohammed Al Atafi ran 20.68s in 200m")
+- If data not found, say so clearly
+- Reference qualification standards when discussing targets
+- Use metric units
+"""
+
+    def build_context(self, query: str) -> str:
+        """
+        Build RAG context by searching relevant data sources.
+
+        Returns context string with:
+        1. Static database summary
+        2. Relevant athlete data (if query mentions athletes/events)
+        3. Benchmark standards (if query mentions qualification/standards)
+        4. Document search results (rulebooks, regulations)
+        """
+        context_parts = [self._get_static_context()]
+
+        # Search for athlete/event data
+        athlete_context = self._search_athletes(query)
+        if athlete_context:
+            context_parts.append(athlete_context)
+
+        # Search for benchmark standards
+        benchmark_context = self._search_benchmarks(query)
+        if benchmark_context:
+            context_parts.append(benchmark_context)
+
+        # Add Project East athletes if relevant
+        query_lower = query.lower()
+        if any(term in query_lower for term in ['project east', 'asian games', '2026', 'nagoya', 'medal target']):
+            pe_context = self._get_project_east_context()
+            if pe_context:
+                context_parts.append(pe_context)
+
+        # Search PDF documents (rulebooks, regulations) via Document RAG
+        if DOCUMENT_RAG_AVAILABLE and get_rag:
+            try:
+                rag = get_rag()
+                doc_context = rag.search_documents(query, n_results=3)
+                if doc_context:
+                    context_parts.append(doc_context)
+            except Exception as e:
+                pass  # Silently fail if document search unavailable
 
         return "\n\n".join(context_parts)
 
+    def _get_project_east_context(self) -> str:
+        """Return Project East 2026 athlete context."""
+        return """
+PROJECT EAST 2026 - ASIAN GAMES MEDAL TARGETS:
+Target: 3-5 medals at Aichi-Nagoya Asian Games
+
+PRIORITY ATHLETES:
+1. Hussain Al Hizam (Pole Vault) - PB 5.72m, Medal Standard 5.70m - MEDAL FAVORITE
+2. Yasser Bakheet (Triple Jump) - PB 17.08m, Medal Standard 16.90m - MEDAL CONTENDER
+3. Mohammed Al Atafi (200m) - PB 20.68s, Medal Standard 20.20s - MEDAL CONTENDER
+4. Mohamed Tolo (Shot Put) - PB 20.23m, Medal Standard 20.50m - MEDAL CONTENDER
+5. Yaqoub Al Muawi (400m Hurdles) - PB 49.12s, Medal Standard 48.80s - MEDAL CONTENDER
+6. Muaz Al Dubaisi (Hammer Throw) - PB 73.50m, Medal Standard 74.00m - DEVELOPMENT
+7. Abdelati Bizimana (800m) - PB 1:44.50, Medal Standard 1:44.00 - DEVELOPMENT
+8. Nasser Mohammed (100m) - PB 10.18s, Medal Standard 10.05s - DEVELOPMENT
+9. 4x100m Relay - PB 38.88s, Medal Standard 38.50s - MEDAL CONTENDER
+"""
+
 
 class OpenRouterClient:
-    """Client for OpenRouter API using OpenAI SDK."""
+    """Client for OpenRouter API using OpenAI SDK with streaming support."""
+
+    # Class-level context cache for faster repeated queries
+    _context_cache = {}
+    _cache_max_size = 50
 
     def __init__(self, api_key: str, model: str = DEFAULT_MODEL):
         self.client = OpenAI(
@@ -350,13 +527,33 @@ class OpenRouterClient:
         else:
             self.context_builder = AthleticsContextBuilder()
 
+    def _get_cached_context(self, user_query: str) -> str:
+        """Get context from cache or build new one."""
+        # Simple hash for cache key
+        cache_key = hash(user_query.lower().strip())
+
+        if cache_key in self._context_cache:
+            return self._context_cache[cache_key]
+
+        # Build new context
+        context = self.context_builder.build_context(user_query)
+
+        # Cache with size limit
+        if len(self._context_cache) >= self._cache_max_size:
+            # Remove oldest entry (simple FIFO)
+            oldest_key = next(iter(self._context_cache))
+            del self._context_cache[oldest_key]
+
+        self._context_cache[cache_key] = context
+        return context
+
     def chat(self, messages: list, user_query: str = None) -> dict:
         """Send chat completion request."""
         try:
-            # Build context if this is a new user message
+            # Build context if this is a new user message (with caching)
             context = ""
             if user_query:
-                context = self.context_builder.build_context(user_query)
+                context = self._get_cached_context(user_query)
 
             # Prepare system message with context
             system_content = ATHLETICS_KNOWLEDGE
@@ -371,7 +568,7 @@ class OpenRouterClient:
                 model=self.model,
                 messages=full_messages,
                 max_tokens=2048,
-                temperature=0.7
+                temperature=0.3  # Lower temperature for factual analytics
             )
 
             return {
@@ -390,6 +587,54 @@ class OpenRouterClient:
                 "error": str(e),
                 "content": f"Error: {str(e)}"
             }
+
+    def chat_stream(self, messages: list, user_query: str = None):
+        """
+        Send chat completion request with streaming.
+        Yields content chunks for real-time display.
+        Returns context at the end.
+        """
+        try:
+            # Build context if this is a new user message (with caching)
+            context = ""
+            if user_query:
+                context = self._get_cached_context(user_query)
+
+            # Prepare system message with context
+            system_content = ATHLETICS_KNOWLEDGE
+            if context and context != "General athletics query - using base knowledge.":
+                system_content += f"\n\nRELEVANT DATA:\n{context}"
+
+            # Build messages with system prompt
+            full_messages = [{"role": "system", "content": system_content}]
+            full_messages.extend(messages)
+
+            # Create streaming response
+            stream = self.client.chat.completions.create(
+                model=self.model,
+                messages=full_messages,
+                max_tokens=2048,
+                temperature=0.3,
+                stream=True
+            )
+
+            # Yield chunks
+            full_content = ""
+            for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    content = chunk.choices[0].delta.content
+                    full_content += content
+                    yield {"type": "content", "content": content}
+
+            # Yield final metadata
+            yield {
+                "type": "done",
+                "full_content": full_content,
+                "context_used": context
+            }
+
+        except Exception as e:
+            yield {"type": "error", "error": str(e)}
 
 ###################################
 # 1) Streamlit Setup
@@ -509,8 +754,9 @@ DB_PROFILES = os.path.join(SQL_DIR, 'ksa_athlete_profiles.db')
 # 4) Data Loading Functions
 ###################################
 
-# Cache TTL: 1 hour (3600 seconds) for Azure data, no TTL for local SQLite
-CACHE_TTL = 3600
+# Cache TTL: 30 minutes for development, 1 hour for production
+# Reduced from 3600 to 1800 for faster iteration during development
+CACHE_TTL = 1800
 
 @st.cache_data
 def load_sqlite_table(db_path, table_name):
@@ -836,8 +1082,69 @@ def load_ksa_combined_rankings():
             st.warning(f"Azure KSA rankings error: {e}")
     return pd.DataFrame()
 
+@st.cache_data(ttl=CACHE_TTL, show_spinner="Loading full rankings (2.3M records)...")
+def load_full_rankings_cached():
+    """
+    Cached wrapper for full rankings data (2.3M rows).
+    Use this instead of calling get_rankings_data() directly to avoid duplicate Azure downloads.
+    """
+    if DATA_CONNECTOR_AVAILABLE:
+        try:
+            df = get_rankings_data()
+            if df is not None and not df.empty:
+                return df
+        except Exception as e:
+            st.warning(f"Azure full rankings error: {e}")
+    return pd.DataFrame()
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def load_ksa_rankings_raw_cached():
+    """
+    Cached wrapper for KSA rankings WITHOUT column renaming.
+    Use this for internal code that expects original column names (competitor, event, result, etc).
+    """
+    if DATA_CONNECTOR_AVAILABLE:
+        try:
+            df = get_ksa_rankings()
+            if df is not None and not df.empty:
+                return df
+        except Exception as e:
+            pass  # Silent fail - caller checks for empty
+    return pd.DataFrame()
+
 # NOTE: Large rankings data is loaded lazily in tabs that need it
 # This improves startup performance significantly
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def get_ai_filter_options():
+    """
+    Cached function to get athlete and event lists for AI chatbot filters.
+    Prevents repeated data loading on every interaction.
+    """
+    athletes = ["(All Athletes)"]
+    events = ["(All Events)"]
+
+    if DATA_CONNECTOR_AVAILABLE:
+        try:
+            ksa_df = get_ksa_athletes()
+            if ksa_df is not None and not ksa_df.empty:
+                # Get athlete names
+                name_col = 'competitor' if 'competitor' in ksa_df.columns else 'full_name' if 'full_name' in ksa_df.columns else None
+                if name_col:
+                    athlete_names = sorted(ksa_df[name_col].dropna().unique().tolist())
+                    athletes.extend(athlete_names)
+
+                # Get events
+                if 'event' in ksa_df.columns:
+                    event_list = sorted(ksa_df['event'].dropna().unique().tolist())
+                    events.extend(event_list)
+                elif 'primary_event' in ksa_df.columns:
+                    event_list = sorted(ksa_df['primary_event'].dropna().unique().tolist())
+                    events.extend(event_list)
+        except Exception:
+            pass
+
+    return athletes, events
 
 try:
     ksa_men_results = load_sqlite_table(DB_KSA_MEN, 'ksa_modal_results_men')
@@ -867,10 +1174,18 @@ def get_road_to_df():
 def get_qual_standards_df():
     return load_qualification_standards()
 
+# Global cached WhatItTakesToWin analyzer (used by Tab 1 and Tab 7)
+@st.cache_resource
+def get_wittw_analyzer():
+    """Load and cache the WhatItTakesToWin analyzer with scraped championship data."""
+    analyzer = WhatItTakesToWin()
+    analyzer.load_scraped_data()
+    return analyzer
+
 ###################################
 # 7) Tabs
 ###################################
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = st.tabs([
     'Event Standards & Progression',
     'Athlete Profiles',
     'Combined Rankings',
@@ -880,7 +1195,8 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
     'What It Takes to Win (Live)',
     'AI Analyst',
     'Coach View',
-    'Project East 2026'
+    'Project East 2026',
+    'Race Intelligence'
 ])
 
 ###################################
@@ -890,65 +1206,134 @@ with tab1:
     st.header('What It Takes to Win')
     st.markdown(f"""
     <p style='color: #ccc; font-size: 0.95em;'>
-    Year-on-year progression of winning performances and finals qualifying marks at <strong style="color: {GOLD_ACCENT};">World Championships</strong>.
+    Year-on-year progression of winning performances and finals qualifying marks at
+    <strong style="color: #FFD700;">Olympics</strong>,
+    <strong style="color: {GOLD_ACCENT};">World Championships</strong>,
+    <strong style="color: {TEAL_PRIMARY};">Asian Games</strong>, and more.
     Compare with KSA athlete performances.
     </p>
     """, unsafe_allow_html=True)
 
-    # Event selection
-    col1, col2 = st.columns(2)
+    # Load WhatItTakesToWin analyzer for live data
+    wittw_tab1 = get_wittw_analyzer()
+
+    # Selection filters
+    col1, col2, col3 = st.columns(3)
 
     with col1:
+        # Championship type dropdown - use keys matching MAJOR_COMP_KEYWORDS
+        comp_types = ['All', 'World Champs', 'Olympic', 'Asian Games', 'Diamond League', 'Arab Championships']
+        if wittw_tab1.data is not None:
+            # Get actual competition types from data
+            actual_types = wittw_tab1.get_competition_types()
+            if actual_types:
+                comp_types = actual_types
+        selected_comp_tab1 = st.selectbox("Championship Type", comp_types, key="tab1_comp_type")
+
+    with col2:
         available_events = list(HISTORICAL_WINNING_MARKS.keys())
         selected_event = st.selectbox("Select Event", available_events, key="standards_event")
 
-    with col2:
+    with col3:
         gender_options = ['men', 'women']
         if selected_event in HISTORICAL_WINNING_MARKS:
             gender_options = list(HISTORICAL_WINNING_MARKS[selected_event].keys())
         selected_gender = st.selectbox("Select Gender", gender_options, key="standards_gender")
 
-    # Get data for selected event
-    if selected_event in HISTORICAL_WINNING_MARKS and selected_gender in HISTORICAL_WINNING_MARKS[selected_event]:
-        event_data = HISTORICAL_WINNING_MARKS[selected_event][selected_gender]
+    # Get LIVE data from WhatItTakesToWin analyzer (filtered by championship type)
+    live_data_available = False
+    df_progression = None
 
-        # Convert to DataFrame
-        years = sorted(event_data.keys())
-        marks = [event_data[y] for y in years]
+    if wittw_tab1.data is not None and len(wittw_tab1.data) > 0:
+        # Filter by championship type
+        filtered_data = wittw_tab1.filter_by_competition(selected_comp_tab1)
+
+        if filtered_data is not None and len(filtered_data) > 0:
+            # Filter by event and gender
+            event_search = selected_event.replace('-', ' ').lower()
+            event_mask = filtered_data['event'].str.lower().str.contains(event_search, na=False)
+            gender_mask = filtered_data['gender'].str.lower() == selected_gender.lower()
+
+            event_data = filtered_data[event_mask & gender_mask].copy()
+
+            if len(event_data) > 0:
+                # Extract year from date
+                event_data['Year'] = pd.to_datetime(event_data['date'], errors='coerce').dt.year
+                event_data = event_data.dropna(subset=['Year'])
+                event_data['Year'] = event_data['Year'].astype(int)
+
+                # Get winning marks (rank 1) by year
+                winners = event_data[event_data['rank'] == 1].copy()
+                if len(winners) > 0:
+                    # Group by year, get best result (for track: min, for field: max)
+                    is_field_event = any(x in selected_event.lower() for x in ['shot', 'discus', 'hammer', 'javelin', 'jump', 'vault', 'throw'])
+
+                    winning_by_year = winners.groupby('Year').agg({
+                        'result': 'first',
+                        'result_numeric': 'max' if is_field_event else 'min'
+                    }).reset_index()
+
+                    years = sorted(winning_by_year['Year'].tolist())
+                    marks = [winning_by_year[winning_by_year['Year'] == y]['result'].iloc[0] for y in years]
+                    marks_seconds = [winning_by_year[winning_by_year['Year'] == y]['result_numeric'].iloc[0] for y in years]
+
+                    df_progression = pd.DataFrame({
+                        'Year': years,
+                        'Winning Mark': marks,
+                        'Mark (seconds/meters)': marks_seconds
+                    })
+                    live_data_available = True
+
+    # Fallback to hardcoded data if live data not available
+    if not live_data_available and selected_event in HISTORICAL_WINNING_MARKS and selected_gender in HISTORICAL_WINNING_MARKS[selected_event]:
+        event_data_static = HISTORICAL_WINNING_MARKS[selected_event][selected_gender]
+        years = sorted(event_data_static.keys())
+        marks = [event_data_static[y] for y in years]
         marks_seconds = [convert_time_to_seconds(m) for m in marks]
-
         df_progression = pd.DataFrame({
             'Year': years,
             'Winning Mark': marks,
             'Mark (seconds/meters)': marks_seconds
         })
 
+    if df_progression is not None and len(df_progression) > 0:
         # Display metrics
-        st.subheader(f"{selected_event.upper()} - {selected_gender.capitalize()} Winning Progression")
+        champ_label = selected_comp_tab1 if selected_comp_tab1 != 'All' else 'Major Championships'
+        st.subheader(f"{selected_event.upper()} - {selected_gender.capitalize()} Winning Progression ({champ_label})")
 
         col1, col2, col3, col4 = st.columns(4)
 
+        marks = df_progression['Winning Mark'].tolist()
+        marks_seconds = df_progression['Mark (seconds/meters)'].tolist()
+        years = df_progression['Year'].tolist()
+
         with col1:
+            latest_year = max(years) if years else 'N/A'
             st.markdown(f"""
             <div class="metric-card">
-                <p style="color: {GOLD_ACCENT}; margin: 0; font-size: 0.85rem;">Latest (2023)</p>
-                <p style="color: white; font-size: 1.5rem; font-weight: bold; margin: 0;">{marks[-1]}</p>
+                <p style="color: {GOLD_ACCENT}; margin: 0; font-size: 0.85rem;">Latest ({latest_year})</p>
+                <p style="color: white; font-size: 1.5rem; font-weight: bold; margin: 0;">{marks[-1] if marks else 'N/A'}</p>
             </div>
             """, unsafe_allow_html=True)
 
         with col2:
+            # Determine best mark based on event type
+            is_field = any(x in selected_event.lower() for x in ['shot', 'discus', 'hammer', 'javelin', 'jump', 'vault', 'throw'])
+            valid_seconds = [m for m in marks_seconds if m is not None and m > 0]
+            best_idx = marks_seconds.index(max(valid_seconds)) if is_field and valid_seconds else marks_seconds.index(min(valid_seconds)) if valid_seconds else 0
+            best_mark = marks[best_idx] if marks else 'N/A'
             st.markdown(f"""
             <div class="metric-card">
                 <p style="color: {TEAL_LIGHT}; margin: 0; font-size: 0.85rem;">Best Ever</p>
-                <p style="color: white; font-size: 1.5rem; font-weight: bold; margin: 0;">{min(marks) if marks_seconds[0] else max(marks)}</p>
+                <p style="color: white; font-size: 1.5rem; font-weight: bold; margin: 0;">{best_mark}</p>
             </div>
             """, unsafe_allow_html=True)
 
         with col3:
-            improvement = marks_seconds[-1] - marks_seconds[0] if all(marks_seconds) else 0
+            improvement = marks_seconds[-1] - marks_seconds[0] if len(marks_seconds) >= 2 and all(m for m in [marks_seconds[0], marks_seconds[-1]]) else 0
             st.markdown(f"""
             <div class="metric-card">
-                <p style="color: #aaa; margin: 0; font-size: 0.85rem;">10yr Change</p>
+                <p style="color: #aaa; margin: 0; font-size: 0.85rem;">Change</p>
                 <p style="color: white; font-size: 1.5rem; font-weight: bold; margin: 0;">{improvement:+.2f}</p>
             </div>
             """, unsafe_allow_html=True)
@@ -958,17 +1343,14 @@ with tab1:
             qual_mark = "N/A"
             qual_standards_df = get_qual_standards_df()
             if qual_standards_df is not None and not qual_standards_df.empty:
-                # Handle both old CSV format (Display_Name) and new parquet format (Event)
                 event_search = selected_event.replace('-', ' ')
                 if 'Display_Name' in qual_standards_df.columns:
                     event_qual = qual_standards_df[qual_standards_df['Display_Name'].str.contains(event_search, case=False, na=False)]
                     if not event_qual.empty:
                         qual_mark = event_qual.iloc[0].get('entry_standard', 'N/A')
                 elif 'Event' in qual_standards_df.columns:
-                    # Use benchmarks parquet format - match event name
                     event_qual = qual_standards_df[qual_standards_df['Event'].str.contains(event_search, case=False, na=False)]
                     if not event_qual.empty:
-                        # Get Gold Standard from benchmarks
                         qual_mark = event_qual.iloc[0].get('Gold Standard', 'N/A')
 
             st.markdown(f"""
@@ -981,20 +1363,52 @@ with tab1:
         # Progression Chart
         fig = go.Figure()
 
-        # Winning marks line
+        # Winning marks line - with dynamic championship name
         fig.add_trace(go.Scatter(
             x=df_progression['Year'],
             y=df_progression['Mark (seconds/meters)'],
             mode='lines+markers',
-            name='World Championship Winner',
+            name=f'{champ_label} Winner',
             line=dict(color=GOLD_ACCENT, width=3),
             marker=dict(size=10, symbol='star'),
             text=df_progression['Winning Mark'],
             hovertemplate="<b>%{x}</b><br>Winning Mark: %{text}<extra></extra>"
         ))
 
-        # Add finals qualifying line if available
-        if selected_event in FINALS_QUALIFYING_MARKS and selected_gender in FINALS_QUALIFYING_MARKS[selected_event]:
+        # Add 8th place line from live data if available
+        if wittw_tab1.data is not None and len(wittw_tab1.data) > 0:
+            filtered_data = wittw_tab1.filter_by_competition(selected_comp_tab1)
+            if filtered_data is not None and len(filtered_data) > 0:
+                event_search = selected_event.replace('-', ' ').lower()
+                event_mask = filtered_data['event'].str.lower().str.contains(event_search, na=False)
+                gender_mask = filtered_data['gender'].str.lower() == selected_gender.lower()
+                event_data = filtered_data[event_mask & gender_mask].copy()
+
+                if len(event_data) > 0:
+                    event_data['Year'] = pd.to_datetime(event_data['date'], errors='coerce').dt.year
+                    event_data = event_data.dropna(subset=['Year'])
+                    event_data['Year'] = event_data['Year'].astype(int)
+
+                    # Get 8th place marks
+                    eighth = event_data[event_data['rank'] == 8].copy()
+                    if len(eighth) > 0:
+                        is_field = any(x in selected_event.lower() for x in ['shot', 'discus', 'hammer', 'javelin', 'jump', 'vault', 'throw'])
+                        eighth_by_year = eighth.groupby('Year').agg({
+                            'result_numeric': 'max' if is_field else 'min'
+                        }).reset_index()
+
+                        fig.add_trace(go.Scatter(
+                            x=eighth_by_year['Year'],
+                            y=eighth_by_year['result_numeric'],
+                            mode='lines+markers',
+                            name='Finals Qualifying (8th place)',
+                            line=dict(color=TEAL_LIGHT, width=2, dash='dash'),
+                            marker=dict(size=8),
+                            hovertemplate="<b>%{x}</b><br>8th Place: %{y}<extra></extra>"
+                        ))
+
+        # Fallback to hardcoded 8th place data
+        elif selected_event in FINALS_QUALIFYING_MARKS and selected_gender in FINALS_QUALIFYING_MARKS[selected_event]:
             finals_data = FINALS_QUALIFYING_MARKS[selected_event][selected_gender]
             finals_years = sorted(finals_data.keys())
             finals_marks = [finals_data[y] for y in finals_years]
@@ -1011,7 +1425,6 @@ with tab1:
 
         # Add KSA athlete PBs if available
         if pbs_df is not None and not pbs_df.empty:
-            # Match event name
             event_pattern = selected_event.replace('-', ' ').replace('m', ' m')
             ksa_pbs = pbs_df[pbs_df['event_name'].str.lower().str.contains(selected_event.replace('-', '').lower(), na=False)]
 
@@ -1019,7 +1432,6 @@ with tab1:
                 for _, pb in ksa_pbs.iterrows():
                     pb_val = convert_time_to_seconds(pb['pb_result'])
                     if pb_val:
-                        # Get athlete name
                         athlete_name = "KSA Athlete"
                         if athletes_df is not None and not athletes_df.empty:
                             athlete_info = athletes_df[athletes_df['athlete_id'] == pb['athlete_id']]
@@ -1035,7 +1447,7 @@ with tab1:
                         )
 
         fig.update_layout(
-            title=f"{selected_event.upper()} - Historical Winning Progression ({selected_gender.capitalize()})",
+            title=f"{selected_event.upper()} - {champ_label} Winning Progression ({selected_gender.capitalize()})",
             xaxis_title="Year",
             yaxis_title="Mark (seconds/meters)",
             plot_bgcolor='rgba(0,0,0,0)',
@@ -1050,9 +1462,250 @@ with tab1:
         # Show data table
         st.subheader("Historical Data")
         st.dataframe(df_progression, use_container_width=True, hide_index=True)
-
     else:
-        st.info(f"No historical data available for {selected_event} ({selected_gender})")
+        st.info(f"No winning progression data available for {selected_event} ({selected_gender}) in {selected_comp_tab1}")
+
+    # === FINALS PERFORMANCE PROGRESSION CHART (1st-8th over time) ===
+    st.markdown("---")
+    st.subheader("Finals Performance Progression (1st-8th)")
+    st.markdown(f"<p style='color: #aaa;'>How performances have evolved across championships for positions 1-8</p>", unsafe_allow_html=True)
+
+    # Use live data from WhatItTakesToWin analyzer
+    if wittw_tab1.data is not None and len(wittw_tab1.data) > 0:
+        # Get column names
+        event_col = 'Event' if 'Event' in wittw_tab1.data.columns else 'event'
+        gender_col = 'Gender' if 'Gender' in wittw_tab1.data.columns else 'gender'
+        rank_col = 'Rank' if 'Rank' in wittw_tab1.data.columns else 'rank'
+        mark_col = 'Mark' if 'Mark' in wittw_tab1.data.columns else ('result' if 'result' in wittw_tab1.data.columns else 'Result')
+
+        # Filter data for selected event, gender, and championship type
+        prog_data = wittw_tab1.data.copy()
+        prog_data = prog_data[prog_data[event_col].astype(str).str.contains(selected_event, case=False, na=False)]
+        prog_data = prog_data[prog_data[gender_col].astype(str).str.lower().str.contains(selected_gender.lower(), na=False)]
+
+        # Filter by championship type if not "All"
+        if selected_comp_tab1 != 'All':
+            prog_data = wittw_tab1.filter_by_competition(selected_comp_tab1)
+            prog_data = prog_data[prog_data[event_col].astype(str).str.contains(selected_event, case=False, na=False)]
+            prog_data = prog_data[prog_data[gender_col].astype(str).str.lower().str.contains(selected_gender.lower(), na=False)]
+
+        # Parse marks to numeric
+        is_field = wittw_tab1.is_field_event(selected_event)
+        if is_field:
+            prog_data['ParsedMark'] = prog_data[mark_col].apply(wittw_tab1.parse_distance_to_meters)
+        else:
+            prog_data['ParsedMark'] = prog_data[mark_col].apply(wittw_tab1.parse_time_to_seconds)
+
+        prog_data = prog_data.dropna(subset=['ParsedMark'])
+
+        if rank_col in prog_data.columns and 'year' in prog_data.columns:
+            # Filter to top 8 positions
+            prog_data = prog_data[prog_data[rank_col] <= 8]
+
+            if not prog_data.empty:
+                # Place labels
+                place_labels = {1: '1st', 2: '2nd', 3: '3rd', 4: '4th', 5: '5th', 6: '6th', 7: '7th', 8: '8th'}
+                prog_data['Place'] = prog_data[rank_col].map(place_labels)
+
+                # Color scale - medal colors for 1-3, distinct colors for 4-8
+                place_colors = {
+                    '1st': '#FFD700', '2nd': '#C0C0C0', '3rd': '#CD7F32',
+                    '4th': '#4CAF50', '5th': '#2196F3', '6th': '#9C27B0',
+                    '7th': '#FF5722', '8th': '#607D8B'
+                }
+
+                # Create progression chart
+                fig_prog = go.Figure()
+
+                for place in ['1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th']:
+                    place_data = prog_data[prog_data['Place'] == place].sort_values('year')
+                    if not place_data.empty:
+                        fig_prog.add_trace(go.Scatter(
+                            x=place_data['year'],
+                            y=place_data['ParsedMark'],
+                            mode='lines+markers',
+                            name=place,
+                            line=dict(color=place_colors.get(place, '#888'), width=2),
+                            marker=dict(size=8),
+                            hovertemplate=f"<b>{place}</b><br>Year: %{{x}}<br>Mark: %{{y:.2f}}<extra></extra>"
+                        ))
+
+                # Update layout
+                fig_prog.update_layout(
+                    title=f"{selected_event.upper()} - Finals Performance Over Time ({selected_comp_tab1})",
+                    xaxis_title="Year",
+                    yaxis_title="Performance",
+                    yaxis=dict(autorange='reversed') if not is_field else dict(),
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    font=dict(color='white'),
+                    height=450,
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=1.02,
+                        xanchor="center",
+                        x=0.5
+                    ),
+                    hovermode='x unified'
+                )
+                fig_prog.update_xaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.2)')
+                fig_prog.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.2)')
+
+                st.plotly_chart(fig_prog, use_container_width=True)
+
+                # Key insight - show gap between Gold and 8th
+                gold_data = prog_data[prog_data['Place'] == '1st']
+                eighth_data = prog_data[prog_data['Place'] == '8th']
+                if not gold_data.empty and not eighth_data.empty:
+                    latest_gold = gold_data.sort_values('year').iloc[-1]['ParsedMark']
+                    latest_eighth = eighth_data.sort_values('year').iloc[-1]['ParsedMark']
+                    gap = abs(latest_gold - latest_eighth)
+                    st.info(f"**Gap Analysis:** Latest gap between Gold and 8th place: **{gap:.2f}** {'seconds' if not is_field else 'm'}")
+            else:
+                st.info(f"No position data available for {selected_event} in {selected_comp_tab1}")
+        else:
+            st.info("Progression chart requires rank and year columns in the data")
+    else:
+        st.info("Live championship data not available. Showing historical winning marks only.")
+
+    # === ROUND STANDARDS SUMMARY (Finals/Semis/Heats) ===
+    st.markdown("---")
+    st.subheader("Championship Round Standards")
+    st.markdown(f"<p style='color: #aaa;'>Final Summary by Place showing Average, Slowest, and Fastest performances</p>", unsafe_allow_html=True)
+
+    if wittw_tab1.data is not None and len(wittw_tab1.data) > 0:
+        # Get filtered data
+        filtered_data = wittw_tab1.filter_by_competition(selected_comp_tab1)
+        if filtered_data is not None and len(filtered_data) > 0:
+            event_col = 'Event' if 'Event' in filtered_data.columns else 'event'
+            gender_col = 'Gender' if 'Gender' in filtered_data.columns else 'gender'
+            rank_col = 'Rank' if 'Rank' in filtered_data.columns else 'rank'
+
+            event_search = selected_event.replace('-', ' ').lower()
+            event_mask = filtered_data[event_col].astype(str).str.lower().str.contains(event_search, na=False)
+            gender_mask = filtered_data[gender_col].astype(str).str.lower() == selected_gender.lower()
+
+            round_data = filtered_data[event_mask & gender_mask].copy()
+
+            if len(round_data) > 0 and rank_col in round_data.columns:
+                # Parse marks to numeric
+                mark_col = 'result' if 'result' in round_data.columns else 'Mark'
+                is_field = any(x in selected_event.lower() for x in ['shot', 'discus', 'hammer', 'javelin', 'jump', 'vault', 'throw'])
+
+                if 'result_numeric' in round_data.columns:
+                    round_data['ParsedMark'] = round_data['result_numeric']
+                elif is_field:
+                    round_data['ParsedMark'] = pd.to_numeric(round_data[mark_col], errors='coerce')
+                else:
+                    round_data['ParsedMark'] = round_data[mark_col].apply(lambda x: convert_time_to_seconds(str(x)) if pd.notna(x) else None)
+
+                round_data = round_data.dropna(subset=['ParsedMark'])
+
+                # Filter to top 12 positions for comprehensive view
+                round_data = round_data[round_data[rank_col] <= 12]
+
+                if len(round_data) > 0:
+                    # Create summary table by rank
+                    summary_rows = []
+                    for rank in range(1, 13):
+                        rank_results = round_data[round_data[rank_col] == rank]['ParsedMark']
+                        if len(rank_results) > 0:
+                            avg_mark = rank_results.mean()
+                            # For track: best=min, worst=max. For field: best=max, worst=min
+                            if is_field:
+                                best_mark = rank_results.max()
+                                worst_mark = rank_results.min()
+                            else:
+                                best_mark = rank_results.min()
+                                worst_mark = rank_results.max()
+
+                            # Format marks appropriately
+                            def format_mark(val, is_field_event):
+                                if val is None or pd.isna(val):
+                                    return 'N/A'
+                                if is_field_event:
+                                    return f"{val:.2f}m"
+                                else:
+                                    if val >= 60:
+                                        mins = int(val // 60)
+                                        secs = val % 60
+                                        return f"{mins}:{secs:05.2f}"
+                                    return f"{val:.2f}"
+
+                            summary_rows.append({
+                                'Rank': rank,
+                                'Average': format_mark(avg_mark, is_field),
+                                'Slowest': format_mark(worst_mark, is_field),
+                                'Fastest': format_mark(best_mark, is_field),
+                                'Count': len(rank_results)
+                            })
+
+                    if summary_rows:
+                        col_table, col_estimate = st.columns([1, 1])
+
+                        with col_table:
+                            st.markdown(f"**Final Summary by Place ({selected_comp_tab1})**")
+                            summary_df = pd.DataFrame(summary_rows)
+                            st.dataframe(summary_df, use_container_width=True, hide_index=True)
+
+                        with col_estimate:
+                            # Estimate Heats/Semis/Finals standards
+                            st.markdown("**Round Qualification Estimates**")
+
+                            # Get 8th place average (finals cutoff)
+                            eighth_place = round_data[round_data[rank_col] == 8]['ParsedMark']
+                            if len(eighth_place) > 0:
+                                final_standard = eighth_place.mean()
+
+                                # Estimate semi/heat standards based on typical margins
+                                if is_field:
+                                    # Field events: semis ~2-3% lower, heats ~5% lower
+                                    semi_standard = final_standard * 0.97
+                                    heat_standard = final_standard * 0.95
+                                else:
+                                    # Track events: semis ~0.5-1% slower, heats ~1-2% slower
+                                    semi_standard = final_standard * 1.005
+                                    heat_standard = final_standard * 1.015
+
+                                def format_mark_simple(val, is_field_event):
+                                    if is_field_event:
+                                        return f"{val:.2f}m"
+                                    else:
+                                        if val >= 60:
+                                            mins = int(val // 60)
+                                            secs = val % 60
+                                            return f"{mins}:{secs:05.2f}"
+                                        return f"{val:.2f}"
+
+                                st.markdown(f"""
+                                <div style="background: linear-gradient(135deg, {TEAL_PRIMARY} 0%, {TEAL_DARK} 100%); padding: 1rem; border-radius: 8px; margin-bottom: 0.5rem;">
+                                    <p style="color: {GOLD_ACCENT}; margin: 0; font-size: 0.9rem;">Finals (8th place)</p>
+                                    <p style="color: white; font-size: 1.3rem; font-weight: bold; margin: 0;">{format_mark_simple(final_standard, is_field)}</p>
+                                </div>
+                                """, unsafe_allow_html=True)
+
+                                st.markdown(f"""
+                                <div style="background: #444; padding: 1rem; border-radius: 8px; margin-bottom: 0.5rem;">
+                                    <p style="color: #C0C0C0; margin: 0; font-size: 0.9rem;">Semi-Finals (est.)</p>
+                                    <p style="color: white; font-size: 1.3rem; font-weight: bold; margin: 0;">{format_mark_simple(semi_standard, is_field)}</p>
+                                </div>
+                                """, unsafe_allow_html=True)
+
+                                st.markdown(f"""
+                                <div style="background: #333; padding: 1rem; border-radius: 8px;">
+                                    <p style="color: #888; margin: 0; font-size: 0.9rem;">Heats (est.)</p>
+                                    <p style="color: white; font-size: 1.3rem; font-weight: bold; margin: 0;">{format_mark_simple(heat_standard, is_field)}</p>
+                                </div>
+                                """, unsafe_allow_html=True)
+
+                                st.caption("*Estimates based on typical championship progression margins")
+                else:
+                    st.info(f"No round data available for {selected_event}")
+            else:
+                st.info(f"No position data available for round analysis")
+    else:
+        st.info("Championship data not available for round analysis")
 
 ###################################
 # Tab 2: Athlete Profiles
@@ -1063,15 +1716,40 @@ with tab2:
     if athletes_df is None or athletes_df.empty:
         st.warning("No athlete profiles found. Run the scraper first: `python scrape_ksa_athlete_profiles_v2.py`")
     else:
+        # Initialize session state for athlete profile selection to prevent navigation issues
+        if 'selected_profile_athlete' not in st.session_state:
+            st.session_state.selected_profile_athlete = "All Athletes"
+        if 'selected_profile_gender' not in st.session_state:
+            st.session_state.selected_profile_gender = "All"
+
         col_filter1, col_filter2 = st.columns(2)
 
         with col_filter1:
             athlete_names = ["All Athletes"] + sorted(athletes_df['full_name'].dropna().unique().tolist())
-            selected_athlete = st.selectbox("Select Athlete", athlete_names, key="profile_athlete")
+            # Use on_change callback to update session state
+            def on_athlete_change():
+                st.session_state.selected_profile_athlete = st.session_state.profile_athlete
+
+            selected_athlete = st.selectbox(
+                "Select Athlete",
+                athlete_names,
+                index=athlete_names.index(st.session_state.selected_profile_athlete) if st.session_state.selected_profile_athlete in athlete_names else 0,
+                key="profile_athlete",
+                on_change=on_athlete_change
+            )
 
         with col_filter2:
             gender_options = ["All", "Men", "Women"]
-            selected_gender_profile = st.selectbox("Gender", gender_options, key="profile_gender")
+            def on_gender_change():
+                st.session_state.selected_profile_gender = st.session_state.profile_gender
+
+            selected_gender_profile = st.selectbox(
+                "Gender",
+                gender_options,
+                index=gender_options.index(st.session_state.selected_profile_gender) if st.session_state.selected_profile_gender in gender_options else 0,
+                key="profile_gender",
+                on_change=on_gender_change
+            )
 
         filtered_athletes = athletes_df.copy()
         if selected_gender_profile != "All":
@@ -1147,7 +1825,7 @@ with tab2:
                     athlete_name = athlete['full_name']
                     try:
                         # Get all results for this athlete from master data
-                        ksa_data = get_ksa_rankings()
+                        ksa_data = load_ksa_rankings_raw_cached()
                         if ksa_data is not None and not ksa_data.empty:
                             # Match by full name (case-insensitive)
                             athlete_results = ksa_data[ksa_data['competitor'].str.upper() == athlete_name.upper()]
@@ -1241,10 +1919,13 @@ with tab2:
                                             </div>
                                             """, unsafe_allow_html=True)
                                         with trend_cols[1]:
+                                            pb_venue = pb_row.get('venue', 'Unknown')[:20] if pb_row.get('venue') else 'Unknown'
+                                            pb_date = pb_row['date'].strftime('%Y-%m-%d') if pd.notna(pb_row.get('date')) else 'N/A'
                                             st.markdown(f"""
                                             <div style="background: {GOLD_ACCENT}; padding: 0.8rem; border-radius: 8px; text-align: center;">
                                                 <p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 0.75rem;">Personal Best</p>
                                                 <p style="color: white; font-size: 1.2rem; font-weight: bold; margin: 0;">{pb_row['result']}</p>
+                                                <p style="color: rgba(255,255,255,0.7); margin: 0; font-size: 0.6rem;">{pb_venue} | {pb_date}</p>
                                             </div>
                                             """, unsafe_allow_html=True)
                                         with trend_cols[2]:
@@ -1310,6 +1991,104 @@ with tab2:
                                                         <p style="color: white; font-size: 1.2rem; font-weight: bold; margin: 0;">{consistency['cv']}%</p>
                                                     </div>
                                                     """, unsafe_allow_html=True)
+
+                                        # === BEST 5 WPA RANKING POINTS ===
+                                        st.markdown("---")
+                                        st.subheader("Best 5 WPA Ranking Points")
+                                        st.markdown(f"<p style='color: #aaa;'>Top performances contributing to World Athletics ranking score</p>", unsafe_allow_html=True)
+
+                                        if 'resultscore' in athlete_results_copy.columns:
+                                            # Get top 5 by WPA ranking points (resultscore)
+                                            top_5_wpa = athlete_results_copy.dropna(subset=['resultscore']).nlargest(5, 'resultscore')
+
+                                            if not top_5_wpa.empty:
+                                                wpa_cols = st.columns(5)
+                                                for idx, (_, row) in enumerate(top_5_wpa.iterrows()):
+                                                    with wpa_cols[idx]:
+                                                        venue_display = row.get('venue', 'Unknown')[:20] if row.get('venue') else 'Unknown'
+                                                        date_display = row['date'].strftime('%Y-%m-%d') if pd.notna(row.get('date')) else 'N/A'
+                                                        st.markdown(f"""
+                                                        <div style="background: linear-gradient(135deg, {TEAL_PRIMARY} 0%, {TEAL_DARK} 100%); padding: 0.8rem; border-radius: 8px; text-align: center; min-height: 140px;">
+                                                            <p style="color: {GOLD_ACCENT}; margin: 0; font-size: 0.75rem; font-weight: bold;">#{idx + 1}</p>
+                                                            <p style="color: white; font-size: 1.3rem; font-weight: bold; margin: 0.25rem 0;">{int(row['resultscore'])}</p>
+                                                            <p style="color: rgba(255,255,255,0.9); margin: 0; font-size: 0.8rem;">{row['result']}</p>
+                                                            <p style="color: rgba(255,255,255,0.7); margin: 0.25rem 0 0 0; font-size: 0.65rem;">{venue_display}</p>
+                                                            <p style="color: rgba(255,255,255,0.6); margin: 0; font-size: 0.6rem;">{date_display}</p>
+                                                        </div>
+                                                        """, unsafe_allow_html=True)
+
+                                                # Show WPA points distribution chart
+                                                if len(top_5_wpa) >= 3:
+                                                    fig_wpa = go.Figure(data=[
+                                                        go.Bar(
+                                                            x=[f"#{i+1}" for i in range(len(top_5_wpa))],
+                                                            y=top_5_wpa['resultscore'].tolist(),
+                                                            marker_color=[GOLD_ACCENT if i == 0 else TEAL_PRIMARY for i in range(len(top_5_wpa))],
+                                                            text=[f"{int(s)}" for s in top_5_wpa['resultscore'].tolist()],
+                                                            textposition='outside'
+                                                        )
+                                                    ])
+                                                    fig_wpa.update_layout(
+                                                        title="WPA Ranking Points Distribution",
+                                                        yaxis_title="Points",
+                                                        plot_bgcolor='rgba(0,0,0,0)',
+                                                        paper_bgcolor='rgba(0,0,0,0)',
+                                                        font=dict(color='white'),
+                                                        height=250,
+                                                        margin=dict(l=20, r=20, t=40, b=20)
+                                                    )
+                                                    st.plotly_chart(fig_wpa, use_container_width=True)
+                                            else:
+                                                st.info("No WPA ranking points data available for this athlete")
+                                        else:
+                                            st.info("WPA ranking points (resultscore) not available in data")
+
+                                        # === MULTI-EVENT SUMMARY ===
+                                        st.markdown("---")
+                                        st.subheader("Multi-Event Summary")
+                                        st.markdown(f"<p style='color: #aaa;'>Performance breakdown across all events competed</p>", unsafe_allow_html=True)
+
+                                        if 'event' in athlete_results_copy.columns:
+                                            event_summary = []
+                                            for event_name, event_group in athlete_results_copy.groupby('event'):
+                                                event_is_field = any(kw in event_name.lower() for kw in ['jump', 'vault', 'put', 'throw', 'discus', 'javelin', 'hammer'])
+
+                                                if event_is_field:
+                                                    best_result = event_group['result_numeric'].max()
+                                                    best_row = event_group[event_group['result_numeric'] == best_result].iloc[0]
+                                                else:
+                                                    best_result = event_group['result_numeric'].min()
+                                                    best_row = event_group[event_group['result_numeric'] == best_result].iloc[0]
+
+                                                # Get last season (current year) best
+                                                current_year = pd.Timestamp.now().year
+                                                last_season_data = event_group[event_group['date'].dt.year >= current_year - 1]
+                                                if not last_season_data.empty:
+                                                    if event_is_field:
+                                                        season_best = last_season_data['result_numeric'].max()
+                                                    else:
+                                                        season_best = last_season_data['result_numeric'].min()
+                                                    season_best_row = last_season_data[last_season_data['result_numeric'] == season_best].iloc[0] if not last_season_data.empty else None
+                                                else:
+                                                    season_best = None
+                                                    season_best_row = None
+
+                                                event_summary.append({
+                                                    'Event': event_name,
+                                                    'Competitions': len(event_group),
+                                                    'PB': best_row['result'],
+                                                    'PB Date': best_row['date'].strftime('%Y-%m-%d') if pd.notna(best_row.get('date')) else 'N/A',
+                                                    'PB Venue': (best_row.get('venue', 'Unknown')[:30] if best_row.get('venue') else 'Unknown'),
+                                                    'Season Best': season_best_row['result'] if season_best_row is not None else 'N/A',
+                                                    'Avg': f"{event_group['result_numeric'].mean():.2f}"
+                                                })
+
+                                            if event_summary:
+                                                event_summary_df = pd.DataFrame(event_summary)
+                                                event_summary_df = event_summary_df.sort_values('Competitions', ascending=False)
+                                                st.dataframe(event_summary_df, use_container_width=True, hide_index=True)
+                                        else:
+                                            st.info("Event data not available for multi-event summary")
 
                                         # === PERFORMANCE PROGRESSION CHART ===
                                         st.markdown("---")
@@ -1386,7 +2165,7 @@ with tab2:
                                     if DATA_CONNECTOR_AVAILABLE and primary_event:
                                         try:
                                             # Get all athletes in same event for comparison
-                                            all_rankings = get_rankings_data()
+                                            all_rankings = load_full_rankings_cached()
 
                                             if all_rankings is not None and not all_rankings.empty:
                                                 event_col = 'event' if 'event' in all_rankings.columns else 'Event Type'
@@ -1491,6 +2270,90 @@ with tab2:
                                     else:
                                         st.info("Select an athlete with competition data to enable H2H comparison")
 
+                                # === TOP COMPETITORS FORM ANALYSIS ===
+                                if RACE_INTELLIGENCE_AVAILABLE and primary_event:
+                                    st.markdown("---")
+                                    with st.expander("🎯 Top Competitors", expanded=False):
+                                        st.markdown(f"<p style='color: #888;'>Top competitors for <b style='color: {GOLD_ACCENT};'>{primary_event}</b> ranked by current form</p>", unsafe_allow_html=True)
+
+                                        competitors = get_competitor_form_cards(primary_event, gender='Men', limit=5)
+
+                                        if competitors:
+                                            for i, comp in enumerate(competitors, 1):
+                                                is_ksa = comp['country_code'] == 'KSA'
+                                                bg_color = 'rgba(0, 84, 48, 0.15)' if is_ksa else 'rgba(0,0,0,0.05)'
+                                                border_color = TEAL_PRIMARY if is_ksa else comp['form_color']
+
+                                                best_races_html = ""
+                                                for race in comp.get('best_2_races', [])[:2]:
+                                                    best_races_html += f"<div>⭐ {race['result']}  {race['venue'][:20] if race['venue'] else ''}  {str(race['date'])[:10]}</div>"
+
+                                                last = comp.get('last_comp', {})
+                                                last_html = f"{last.get('result', '')} @ {last.get('venue', '')[:15] if last.get('venue') else ''} ({last.get('days_ago', 0)}d ago)" if last else ""
+
+                                                st.markdown(f"""
+                                                <div style="background: {bg_color}; border-left: 4px solid {border_color};
+                                                            padding: 1rem; margin: 0.5rem 0; border-radius: 0 8px 8px 0;">
+                                                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                                                        <div>
+                                                            <b style="font-size: 1.1rem;">{i}. {comp['athlete_name']}</b>
+                                                            <span style="color: #888;">({comp['country_code']})</span>
+                                                        </div>
+                                                        <div style="text-align: right;">
+                                                            <span style="color: {comp['form_color']}; font-size: 1.2rem; font-weight: bold;">
+                                                                {comp['form_icon']} {comp['form_score']:.0f}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                    <div style="color: #666; font-size: 0.9rem; margin-top: 0.5rem;">
+                                                        PB: {comp['pb']:.2f if comp['pb'] else 'N/A'} | Avg: {comp['avg_last_5']:.2f} | {comp['form_status']}
+                                                    </div>
+                                                    <div style="color: #888; font-size: 0.85rem; margin-top: 0.5rem;">
+                                                        <b>Best 2:</b><br>{best_races_html if best_races_html else 'No data'}
+                                                    </div>
+                                                    <div style="color: #aaa; font-size: 0.8rem; margin-top: 0.25rem;">
+                                                        Last: {last_html if last_html else 'N/A'}
+                                                    </div>
+                                                </div>
+                                                """, unsafe_allow_html=True)
+                                        else:
+                                            st.info("No competitor data available for this event")
+
+                                # === CAREER MILESTONES TIMELINE ===
+                                if RACE_INTELLIGENCE_AVAILABLE:
+                                    st.markdown("---")
+                                    with st.expander("📅 Career Milestones", expanded=False):
+                                        milestones = get_career_milestones(athlete_name, primary_event if primary_event else None)
+
+                                        if milestones:
+                                            # Group by year
+                                            years = {}
+                                            for m in milestones:
+                                                year = m.get('year', 'Unknown')
+                                                if year not in years:
+                                                    years[year] = []
+                                                years[year].append(m)
+
+                                            # Display timeline
+                                            for year in sorted(years.keys(), reverse=True):
+                                                st.markdown(f"### {year}")
+                                                for m in years[year]:
+                                                    icon = m.get('icon', '●')
+                                                    desc = m.get('description', '')
+                                                    date_str = str(m.get('date', ''))[:10]
+
+                                                    st.markdown(f"""
+                                                    <div style="display: flex; align-items: center; margin: 0.5rem 0; padding-left: 1rem; border-left: 2px solid {TEAL_PRIMARY};">
+                                                        <span style="font-size: 1.2rem; margin-right: 0.5rem;">{icon}</span>
+                                                        <div>
+                                                            <b>{desc}</b>
+                                                            <span style="color: #888; font-size: 0.85rem; margin-left: 0.5rem;">{date_str}</span>
+                                                        </div>
+                                                    </div>
+                                                    """, unsafe_allow_html=True)
+                                        else:
+                                            st.info("No career milestones detected")
+
                                 # === COMPETITION RESULTS TABLE ===
                                 st.markdown("---")
                                 st.subheader("Competition Results")
@@ -1589,6 +2452,11 @@ with tab3:
         if selected_event != 'All Events':
             display_df = display_df[display_df[event_col] == selected_event]
 
+        # Sort by rank (ascending order)
+        rank_col = 'Rank' if 'Rank' in display_df.columns else 'rank' if 'rank' in display_df.columns else None
+        if rank_col:
+            display_df = display_df.sort_values(rank_col, ascending=True, na_position='last')
+
         # Pagination
         total_rows = len(display_df)
         page_size = 100
@@ -1645,7 +2513,7 @@ with tab4:
         if DATA_CONNECTOR_AVAILABLE:
             try:
                 # Get full rankings data
-                full_rankings = get_rankings_data()
+                full_rankings = load_full_rankings_cached()
 
                 if full_rankings is not None and not full_rankings.empty:
                     rival_countries = ['KSA', 'BRN', 'QAT', 'UAE', 'KUW', 'OMA', 'IRN', 'JOR']
@@ -1789,12 +2657,110 @@ with tab4:
 with tab5:
     st.markdown(f"""
     <div style="background: linear-gradient(135deg, {TEAL_PRIMARY} 0%, {TEAL_DARK} 100%); padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
-        <h2 style="color: white; margin: 0;">World Championships Qualification Analysis</h2>
+        <h2 style="color: white; margin: 0;">Championship Qualification Standards</h2>
         <p style="color: rgba(255,255,255,0.9); margin: 0.5rem 0 0 0;">
-            Tokyo 2025 - Comprehensive analysis of qualification routes, entry standards, and ranking positions
+            Entry standards (points & times) for <strong style="color: #FFD700;">Olympics</strong>,
+            <strong style="color: {GOLD_ACCENT};">World Championships</strong>,
+            <strong style="color: {TEAL_LIGHT};">Asian Games</strong>, and
+            <strong style="color: #C0C0C0;">GCC Championships</strong>
         </p>
     </div>
     """, unsafe_allow_html=True)
+
+    # === MULTI-CHAMPIONSHIP STANDARDS SECTION ===
+    st.subheader("Qualification Standards by Championship")
+
+    # Use WhatItTakesToWin analyzer for live championship data
+    wittw_tab5 = get_wittw_analyzer()
+
+    # Championship selector
+    col_champ1, col_champ2, col_champ3 = st.columns(3)
+
+    with col_champ1:
+        # Use dictionary keys that match MAJOR_COMP_KEYWORDS in what_it_takes_to_win.py
+        champ_types_tab5 = ['World Champs', 'Olympic', 'Asian Games', 'Diamond League', 'Arab Championships']
+        if wittw_tab5.data is not None:
+            actual_types = wittw_tab5.get_competition_types()
+            if actual_types:
+                champ_types_tab5 = actual_types
+        selected_champ_tab5 = st.selectbox("Championship", champ_types_tab5, key="tab5_champ_type")
+
+    with col_champ2:
+        gender_tab5 = st.selectbox("Gender", ['men', 'women'], key="tab5_gender")
+
+    with col_champ3:
+        year_options_tab5 = ['All Years'] + [str(y) for y in wittw_tab5.get_available_years()] if wittw_tab5.data is not None else ['All Years']
+        selected_year_tab5 = st.selectbox("Year", year_options_tab5, key="tab5_year")
+
+    # Generate standards report for selected championship
+    if wittw_tab5.data is not None and len(wittw_tab5.data) > 0:
+        year_filter = None if selected_year_tab5 == 'All Years' else int(selected_year_tab5)
+        standards_report = wittw_tab5.generate_what_it_takes_report(gender_tab5, year_filter, selected_champ_tab5)
+
+        if len(standards_report) > 0:
+            st.success(f"**{len(standards_report)} events** with standards data for {selected_champ_tab5}")
+
+            # Show key columns
+            display_cols_tab5 = ['Event', 'Gold Standard', 'Silver Standard', 'Bronze Standard', 'Final Standard (8th)', 'Sample Size']
+            display_cols_tab5 = [c for c in display_cols_tab5 if c in standards_report.columns]
+
+            st.dataframe(
+                standards_report[display_cols_tab5],
+                use_container_width=True,
+                hide_index=True
+            )
+
+            # Event category summary
+            st.markdown("---")
+            st.caption("**Quick Reference - Entry Standards by Event Category**")
+
+            # Categorize events
+            sprints = standards_report[standards_report['Event'].str.contains('100|200|400', case=False, na=False) & ~standards_report['Event'].str.contains('hurdle', case=False, na=False)]
+            mid_dist = standards_report[standards_report['Event'].str.contains('800|1500', case=False, na=False)]
+            long_dist = standards_report[standards_report['Event'].str.contains('3000|5000|10000|Marathon', case=False, na=False)]
+
+            cat_col1, cat_col2, cat_col3 = st.columns(3)
+            with cat_col1:
+                if not sprints.empty:
+                    st.markdown(f"**Sprints ({len(sprints)} events)**")
+                    for _, row in sprints.head(5).iterrows():
+                        gold = row.get('Gold Standard', 'N/A')
+                        st.caption(f"• {row['Event']}: {gold}")
+            with cat_col2:
+                if not mid_dist.empty:
+                    st.markdown(f"**Middle Distance ({len(mid_dist)} events)**")
+                    for _, row in mid_dist.head(5).iterrows():
+                        gold = row.get('Gold Standard', 'N/A')
+                        st.caption(f"• {row['Event']}: {gold}")
+            with cat_col3:
+                if not long_dist.empty:
+                    st.markdown(f"**Long Distance ({len(long_dist)} events)**")
+                    for _, row in long_dist.head(5).iterrows():
+                        gold = row.get('Gold Standard', 'N/A')
+                        st.caption(f"• {row['Event']}: {gold}")
+        else:
+            st.warning(f"No standards data available for {selected_champ_tab5}")
+            # Debug info
+            if wittw_tab5.data is not None:
+                filtered = wittw_tab5.filter_by_competition(selected_champ_tab5)
+                events = wittw_tab5.get_available_events()
+                st.caption(f"Debug: Total records: {len(wittw_tab5.data):,} | Filtered: {len(filtered) if filtered is not None else 0} | Events: {len(events)}")
+                if filtered is not None and len(filtered) > 0:
+                    cols = filtered.columns.tolist()
+                    st.caption(f"Columns: {', '.join(cols[:10])}")
+                    # Check if rank column exists
+                    rank_col = 'Rank' if 'Rank' in filtered.columns else ('rank' if 'rank' in filtered.columns else None)
+                    if rank_col:
+                        st.caption(f"Rank values: {sorted(filtered[rank_col].dropna().unique()[:10])}")
+                    else:
+                        st.caption("No rank column found in data")
+    else:
+        st.info("Championship data loading...")
+
+    st.markdown("---")
+
+    # === WORLD CHAMPIONSHIPS QUALIFICATION TRACKING ===
+    st.subheader("World Championships Tokyo 2025 - Live Qualification Tracking")
 
     # Show data source indicator
     mode = get_data_mode() if DATA_CONNECTOR_AVAILABLE else 'local'
@@ -2153,18 +3119,28 @@ with tab5:
 
         # === NEAR MISS ANALYSIS ===
         st.markdown("---")
-        st.subheader("Near Miss Analysis - Athletes Close to Standards")
+        st.subheader("Near Miss Analysis - Active Athletes Close to Standards")
         st.markdown(f"""
         <p style='color: #ccc; font-size: 0.9em;'>
-        KSA athletes within <strong style="color: {GOLD_ACCENT};">5%</strong> of qualification standards who could break through with focused training.
+        <strong>Active KSA athletes (2023+)</strong> within <strong style="color: {GOLD_ACCENT};">5%</strong> of qualification standards who could break through with focused training.
         </p>
         """, unsafe_allow_html=True)
 
-        # Get KSA athletes from master data
+        # Get KSA athletes from master data (ACTIVE athletes only - 2023+)
         if DATA_CONNECTOR_AVAILABLE:
             try:
-                ksa_rankings = get_ksa_rankings()
+                ksa_rankings = load_ksa_rankings_raw_cached()
                 if ksa_rankings is not None and not ksa_rankings.empty:
+                    # Filter to active athletes (results in 2023 or later)
+                    if 'year' in ksa_rankings.columns:
+                        active_rankings = ksa_rankings[ksa_rankings['year'] >= 2023]
+                    elif 'date' in ksa_rankings.columns:
+                        ksa_rankings['_temp_year'] = pd.to_datetime(ksa_rankings['date'], errors='coerce').dt.year
+                        active_rankings = ksa_rankings[ksa_rankings['_temp_year'] >= 2023].copy()
+                        active_rankings = active_rankings.drop(columns=['_temp_year'], errors='ignore')
+                    else:
+                        active_rankings = ksa_rankings  # Fall back to all if no date column
+
                     near_miss_data = []
 
                     # Tokyo 2025 entry standards (in seconds for track, meters for field)
@@ -2221,13 +3197,13 @@ with tab5:
                         return gap, pct
 
                     # Determine event column name
-                    event_col = 'event' if 'event' in ksa_rankings.columns else 'Event Type' if 'Event Type' in ksa_rankings.columns else None
-                    result_col = 'result' if 'result' in ksa_rankings.columns else 'Result' if 'Result' in ksa_rankings.columns else None
-                    athlete_col = 'competitor' if 'competitor' in ksa_rankings.columns else 'Competitor' if 'Competitor' in ksa_rankings.columns else None
+                    event_col = 'event' if 'event' in active_rankings.columns else 'Event Type' if 'Event Type' in active_rankings.columns else None
+                    result_col = 'result' if 'result' in active_rankings.columns else 'Result' if 'Result' in active_rankings.columns else None
+                    athlete_col = 'competitor' if 'competitor' in active_rankings.columns else 'Competitor' if 'Competitor' in active_rankings.columns else None
 
                     if event_col and result_col and athlete_col:
-                        # Group by athlete and event
-                        for (athlete, event), group in ksa_rankings.groupby([athlete_col, event_col]):
+                        # Group by athlete and event (active athletes 2023+ only)
+                        for (athlete, event), group in active_rankings.groupby([athlete_col, event_col]):
                             # Parse results and get PB
                             results = group[result_col].apply(lambda x: parse_result_to_numeric(x, event)).dropna()
                             if results.empty:
@@ -2339,6 +3315,71 @@ with tab5:
             st.dataframe(display_qual, use_container_width=True, hide_index=True)
         else:
             st.dataframe(qual_standards_df, use_container_width=True, hide_index=True)
+
+    # === STANDARDS PROGRESSION HISTORY ===
+    st.markdown("---")
+    with st.expander("📈 Qualification Standards History", expanded=False):
+        st.markdown(f"""
+        <p style='color: #888;'>Track how qualification standards have changed over the years</p>
+        """, unsafe_allow_html=True)
+
+        prog_col1, prog_col2 = st.columns(2)
+        with prog_col1:
+            prog_event = st.selectbox("Event", ['100m', '200m', '400m', '800m', '1500m'], key='prog_event')
+        with prog_col2:
+            prog_gender = st.selectbox("Gender", ['Men', 'Women'], key='prog_gender')
+
+        if RACE_INTELLIGENCE_AVAILABLE:
+            standards_df = get_standards_progression(prog_event, prog_gender)
+
+            if not standards_df.empty:
+                # Line chart
+                fig = go.Figure()
+
+                for col in ['Olympic', 'World Champs', 'Asian Games']:
+                    if col in standards_df.columns:
+                        valid_data = standards_df[standards_df[col].notna()]
+                        if not valid_data.empty:
+                            fig.add_trace(go.Scatter(
+                                x=valid_data['Year'],
+                                y=valid_data[col],
+                                mode='lines+markers',
+                                name=col,
+                                line={'width': 3},
+                                marker={'size': 10}
+                            ))
+
+                fig.update_layout(
+                    title=f'{prog_event} {prog_gender} Qualification Standards',
+                    xaxis_title='Year',
+                    yaxis_title='Standard',
+                    yaxis={'autorange': 'reversed'},  # Lower time = better
+                    height=400,
+                    plot_bgcolor='white',
+                    font={'family': 'Inter, sans-serif'}
+                )
+
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Table
+                st.dataframe(standards_df, use_container_width=True, hide_index=True)
+
+                # Trend insight
+                if len(standards_df) >= 2:
+                    latest = standards_df.iloc[0]
+                    oldest = standards_df.iloc[-1]
+                    for col in ['Olympic', 'World Champs']:
+                        if col in standards_df.columns and pd.notna(latest[col]) and pd.notna(oldest[col]):
+                            change = latest[col] - oldest[col]
+                            years = latest['Year'] - oldest['Year']
+                            if years > 0:
+                                per_year = change / years
+                                direction = "tightening" if change < 0 else "loosening"
+                                st.info(f"💡 {col} standards {direction} by ~{abs(per_year):.2f}s per year")
+            else:
+                st.info(f"No historical data available for {prog_event}")
+        else:
+            st.warning("Race intelligence module not available")
 
 ###################################
 # Tab 6: Major Games Analytics
@@ -2558,13 +3599,7 @@ with tab7:
     </p>
     """, unsafe_allow_html=True)
 
-    # Initialize What It Takes to Win analyzer and load data
-    @st.cache_resource
-    def get_wittw_analyzer():
-        analyzer = WhatItTakesToWin()
-        analyzer.load_scraped_data()
-        return analyzer
-
+    # Use globally cached analyzer (defined at top of file)
     wittw = get_wittw_analyzer()
 
     # Show data source
@@ -2841,7 +3876,7 @@ with tab7:
                     ksa_athletes = pd.DataFrame()
                     if DATA_CONNECTOR_AVAILABLE:
                         try:
-                            ksa_data = get_ksa_rankings()
+                            ksa_data = load_ksa_rankings_raw_cached()
                             if ksa_data is not None and not ksa_data.empty:
                                 # Get best result per athlete per event
                                 comp_col = 'competitor' if 'competitor' in ksa_data.columns else 'Athlete'
@@ -3004,8 +4039,8 @@ with tab8:
     <div style="background: linear-gradient(135deg, {TEAL_PRIMARY} 0%, {TEAL_DARK} 100%); padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
         <h2 style="color: white; margin: 0;">AI Athletics Analyst</h2>
         <p style="color: rgba(255,255,255,0.9); margin: 0.5rem 0 0 0;">
-            Ask questions about athlete performance, competition standards, and strategic insights.
-            Powered by free AI models via OpenRouter.
+            Ask questions about athlete performance, competition standards, rulebooks, and strategic insights.
+            RAG-powered search across Azure Blob data and PDF documents.
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -3015,6 +4050,13 @@ with tab8:
         st.session_state.chatbot_messages = []
     if 'chatbot_model' not in st.session_state:
         st.session_state.chatbot_model = DEFAULT_MODEL
+    # Initialize AI context filter state to prevent selection reset
+    if 'ai_athlete_filter' not in st.session_state:
+        st.session_state.ai_athlete_filter = "(All Athletes)"
+    if 'ai_event_filter' not in st.session_state:
+        st.session_state.ai_event_filter = "(All Events)"
+    if 'ai_context_prefix' not in st.session_state:
+        st.session_state.ai_context_prefix = ""
 
     # Check for API key
     api_key = get_openrouter_key()
@@ -3068,6 +4110,47 @@ with tab8:
                 st.session_state.chatbot_messages = []
                 st.rerun()
 
+        # === DOCUMENT RAG STATUS ===
+        if DOCUMENT_RAG_AVAILABLE:
+            with st.expander("Knowledge Base Status", expanded=False):
+                try:
+                    rag_status = get_rag_status()
+
+                    status_col1, status_col2, status_col3 = st.columns(3)
+
+                    with status_col1:
+                        st.metric("Azure Blob", "Connected" if rag_status.get('azure_available') else "Local Only")
+
+                    with status_col2:
+                        vector_stats = rag_status.get('vector_store', {})
+                        st.metric("Indexed Chunks", vector_stats.get('count', 0))
+
+                    with status_col3:
+                        st.metric("Total Documents", rag_status.get('total_documents', 0))
+
+                    # List documents
+                    azure_docs = rag_status.get('azure_documents', [])
+                    local_docs = rag_status.get('local_documents', [])
+
+                    if azure_docs:
+                        st.markdown(f"**Azure Documents:** {', '.join(azure_docs[:5])}")
+                    if local_docs:
+                        st.markdown(f"**Local Documents:** {', '.join(local_docs[:5])}")
+
+                    # Index documents button
+                    if st.button("Re-Index Documents", key="reindex_docs"):
+                        with st.spinner("Indexing documents..."):
+                            rag = get_rag()
+                            result = rag.index_documents()
+                            st.success(f"Indexed {result['processed']} documents ({result['chunks']} chunks) from {result.get('source', 'local')}")
+                            if result.get('errors'):
+                                st.warning(f"Errors: {', '.join(result['errors'][:3])}")
+
+                    st.caption("Place PDF rulebooks in the `documents/` folder or upload to Azure Blob `athletics/documents/`")
+
+                except Exception as e:
+                    st.error(f"RAG Status Error: {str(e)[:100]}")
+
         st.markdown("---")
 
         # === CONTEXT FILTER: Select Athlete and Event ===
@@ -3076,43 +4159,32 @@ with tab8:
 
             filter_col1, filter_col2, filter_col3 = st.columns([2, 2, 1])
 
-            # Get available athletes from data
-            available_athletes = ["(All Athletes)"]
-            available_events = ["(All Events)"]
-
-            if DATA_CONNECTOR_AVAILABLE:
-                try:
-                    ksa_df = get_ksa_athletes()
-                    if ksa_df is not None and not ksa_df.empty:
-                        # Get athlete names
-                        name_col = 'competitor' if 'competitor' in ksa_df.columns else 'full_name' if 'full_name' in ksa_df.columns else None
-                        if name_col:
-                            athlete_names = sorted(ksa_df[name_col].dropna().unique().tolist())
-                            available_athletes.extend(athlete_names)
-
-                        # Get events
-                        if 'event' in ksa_df.columns:
-                            events = sorted(ksa_df['event'].dropna().unique().tolist())
-                            available_events.extend(events)
-                        elif 'primary_event' in ksa_df.columns:
-                            events = sorted(ksa_df['primary_event'].dropna().unique().tolist())
-                            available_events.extend(events)
-                except Exception:
-                    pass
+            # Get available athletes from data (CACHED for speed)
+            available_athletes, available_events = get_ai_filter_options()
 
             with filter_col1:
+                # Compute index from session state (preserves selection across reruns)
+                athlete_idx = 0
+                if st.session_state.ai_athlete_filter in available_athletes:
+                    athlete_idx = available_athletes.index(st.session_state.ai_athlete_filter)
+
                 selected_ai_athlete = st.selectbox(
                     "Athlete",
                     available_athletes,
-                    index=0,
+                    index=athlete_idx,
                     key="ai_athlete_filter"
                 )
 
             with filter_col2:
+                # Compute index from session state (preserves selection across reruns)
+                event_idx = 0
+                if st.session_state.ai_event_filter in available_events:
+                    event_idx = available_events.index(st.session_state.ai_event_filter)
+
                 selected_ai_event = st.selectbox(
                     "Event",
                     available_events,
-                    index=0,
+                    index=event_idx,
                     key="ai_event_filter"
                 )
 
@@ -3194,26 +4266,40 @@ with tab8:
                 "content": user_input
             })
 
-            # Create client and get response
+            # Create client and get streaming response
             try:
-                with st.spinner("Analyzing..."):
-                    client = OpenRouterClient(api_key, st.session_state.chatbot_model)
+                client = OpenRouterClient(api_key, st.session_state.chatbot_model)
 
-                    # Prepare messages for API (without context field)
-                    api_messages = [{"role": m["role"], "content": m["content"]}
-                                   for m in st.session_state.chatbot_messages]
+                # Prepare messages for API (without context field)
+                api_messages = [{"role": m["role"], "content": m["content"]}
+                               for m in st.session_state.chatbot_messages]
 
-                    # Use enhanced query for context building
-                    response = client.chat(api_messages, user_query=enhanced_query)
+                # Use streaming for real-time response display
+                with st.chat_message("assistant"):
+                    response_placeholder = st.empty()
+                    full_response = ""
+                    context_used = ""
 
-                # Add assistant response
+                    for chunk in client.chat_stream(api_messages, user_query=enhanced_query):
+                        if chunk["type"] == "content":
+                            full_response += chunk["content"]
+                            response_placeholder.markdown(full_response + "▌")
+                        elif chunk["type"] == "done":
+                            full_response = chunk["full_content"]
+                            context_used = chunk.get("context_used", "")
+                            response_placeholder.markdown(full_response)
+                        elif chunk["type"] == "error":
+                            response_placeholder.error(f"Error: {chunk['error']}")
+                            full_response = f"Error: {chunk['error']}"
+
+                # Add assistant response to history
                 st.session_state.chatbot_messages.append({
                     "role": "assistant",
-                    "content": response["content"],
-                    "context": response.get("context_used", "")
+                    "content": full_response,
+                    "context": context_used
                 })
 
-                # Clear input and rerun to show new messages
+                # Rerun to update chat history display
                 st.rerun()
             except Exception as e:
                 st.error(f"Error processing request: {str(e)}")
@@ -3239,18 +4325,34 @@ with tab8:
                         "role": "user",
                         "content": question
                     })
-                    # Trigger processing
+                    # Trigger streaming response
                     try:
-                        with st.spinner("Analyzing..."):
-                            client = OpenRouterClient(api_key, st.session_state.chatbot_model)
-                            api_messages = [{"role": m["role"], "content": m["content"]}
-                                           for m in st.session_state.chatbot_messages]
-                            response = client.chat(api_messages, user_query=question)
+                        client = OpenRouterClient(api_key, st.session_state.chatbot_model)
+                        api_messages = [{"role": m["role"], "content": m["content"]}
+                                       for m in st.session_state.chatbot_messages]
+
+                        # Stream the response
+                        with st.chat_message("assistant"):
+                            response_placeholder = st.empty()
+                            full_response = ""
+                            context_used = ""
+
+                            for chunk in client.chat_stream(api_messages, user_query=question):
+                                if chunk["type"] == "content":
+                                    full_response += chunk["content"]
+                                    response_placeholder.markdown(full_response + "▌")
+                                elif chunk["type"] == "done":
+                                    full_response = chunk["full_content"]
+                                    context_used = chunk.get("context_used", "")
+                                    response_placeholder.markdown(full_response)
+                                elif chunk["type"] == "error":
+                                    response_placeholder.error(f"Error: {chunk['error']}")
+                                    full_response = f"Error: {chunk['error']}"
 
                         st.session_state.chatbot_messages.append({
                             "role": "assistant",
-                            "content": response["content"],
-                            "context": response.get("context_used", "")
+                            "content": full_response,
+                            "context": context_used
                         })
                         st.rerun()
                     except Exception as e:
@@ -3266,7 +4368,7 @@ with tab9:
         # Load master rankings data for Coach View
         try:
             if DATA_CONNECTOR_AVAILABLE:
-                coach_df = get_rankings_data()
+                coach_df = load_full_rankings_cached()
                 if coach_df is not None and not coach_df.empty:
                     render_coach_view(coach_df)
                 else:
@@ -3290,6 +4392,145 @@ with tab9:
 ###################################
 # Tab 10: Project East 2026
 ###################################
+
+@st.cache_data(ttl=600, show_spinner=False)  # Cache for 10 minutes
+def get_project_east_live_data():
+    """
+    Fetch live performance data for Project East athletes from master.parquet.
+    Updates PB/SB dynamically while preserving strategic metadata.
+    """
+    if not DATA_CONNECTOR_AVAILABLE:
+        return PROJECT_EAST_ATHLETES
+
+    try:
+        # Get KSA rankings data
+        ksa_data = load_ksa_rankings_raw_cached()
+        if ksa_data is None or ksa_data.empty:
+            return PROJECT_EAST_ATHLETES
+
+        # Determine column names
+        athlete_col = next((c for c in ['competitor', 'Competitor', 'full_name', 'name'] if c in ksa_data.columns), None)
+        event_col = next((c for c in ['event', 'Event', 'Event Type'] if c in ksa_data.columns), None)
+        result_col = next((c for c in ['result', 'Result', 'result_numeric'] if c in ksa_data.columns), None)
+        date_col = next((c for c in ['date', 'Date', 'competition_date'] if c in ksa_data.columns), None)
+        venue_col = next((c for c in ['venue', 'Venue', 'competition'] if c in ksa_data.columns), None)
+
+        if not all([athlete_col, event_col, result_col]):
+            return PROJECT_EAST_ATHLETES
+
+        # Helper to parse results
+        def parse_result(result_str, event_name):
+            """Parse result to numeric (seconds for track, meters for field)."""
+            if pd.isna(result_str):
+                return None
+            result_str = str(result_str).strip()
+            try:
+                if ':' in result_str:
+                    parts = result_str.split(':')
+                    if len(parts) == 2:
+                        return float(parts[0]) * 60 + float(parts[1])
+                return float(result_str.replace('m', '').replace('s', '').strip())
+            except:
+                return None
+
+        # Event name mapping for matching
+        event_map = {
+            '200m': ['200m', '200-metres', '200 metres', '200 meters'],
+            'Pole Vault': ['pole-vault', 'pole vault'],
+            'Shot Put': ['shot-put', 'shot put'],
+            'Triple Jump': ['triple-jump', 'triple jump'],
+            '800m': ['800m', '800-metres', '800 metres'],
+            'Hammer Throw': ['hammer-throw', 'hammer throw'],
+            '400m Hurdles': ['400m-hurdles', '400-metres-hurdles', '400 metres hurdles', '400m hurdles'],
+            '100m': ['100m', '100-metres', '100 metres'],
+            '4x100m Relay': ['4x100m', '4x100-metres-relay', '4x100m relay', '4 x 100 metres relay']
+        }
+
+        updated_athletes = []
+        current_year = 2025  # Season year for SB
+
+        for athlete_template in PROJECT_EAST_ATHLETES:
+            athlete = athlete_template.copy()
+
+            # Skip relay for now (needs separate handling)
+            if 'Relay' in athlete['event']:
+                # Try to find relay results
+                relay_variants = event_map.get(athlete['event'], [athlete['event'].lower()])
+                relay_mask = ksa_data[event_col].str.lower().isin([v.lower() for v in relay_variants])
+                relay_data = ksa_data[relay_mask]
+
+                if not relay_data.empty:
+                    results = relay_data[result_col].apply(lambda x: parse_result(x, athlete['event'])).dropna()
+                    if not results.empty:
+                        athlete['pb'] = results.min()
+                        # Get SB (current year results)
+                        if date_col:
+                            try:
+                                relay_data_copy = relay_data.copy()
+                                relay_data_copy['_parsed'] = relay_data_copy[result_col].apply(lambda x: parse_result(x, athlete['event']))
+                                relay_data_copy['_year'] = pd.to_datetime(relay_data_copy[date_col], errors='coerce').dt.year
+                                current_season = relay_data_copy[relay_data_copy['_year'] >= current_year]
+                                if not current_season.empty:
+                                    athlete['sb'] = current_season['_parsed'].dropna().min()
+                            except:
+                                athlete['sb'] = athlete['pb']
+
+                updated_athletes.append(athlete)
+                continue
+
+            # Find athlete in data
+            name_parts = athlete['name'].lower().split()
+            athlete_mask = ksa_data[athlete_col].str.lower().apply(
+                lambda x: all(part in str(x).lower() for part in name_parts) if pd.notna(x) else False
+            )
+
+            # Filter by event
+            event_variants = event_map.get(athlete['event'], [athlete['event'].lower()])
+            event_mask = ksa_data[event_col].str.lower().isin([v.lower() for v in event_variants])
+
+            athlete_event_data = ksa_data[athlete_mask & event_mask]
+
+            if not athlete_event_data.empty:
+                # Parse all results
+                is_field = is_field_event(athlete['event'])
+                results = athlete_event_data[result_col].apply(lambda x: parse_result(x, athlete['event'])).dropna()
+
+                if not results.empty:
+                    # PB: best result (max for field, min for track)
+                    athlete['pb'] = results.max() if is_field else results.min()
+
+                    # SB: best result from current season
+                    if date_col:
+                        try:
+                            athlete_event_data = athlete_event_data.copy()
+                            athlete_event_data['_parsed'] = athlete_event_data[result_col].apply(lambda x: parse_result(x, athlete['event']))
+                            athlete_event_data['_year'] = pd.to_datetime(athlete_event_data[date_col], errors='coerce').dt.year
+                            current_season = athlete_event_data[athlete_event_data['_year'] >= current_year]
+                            if not current_season.empty and not current_season['_parsed'].dropna().empty:
+                                athlete['sb'] = current_season['_parsed'].max() if is_field else current_season['_parsed'].min()
+                            else:
+                                athlete['sb'] = athlete['pb']
+                        except:
+                            athlete['sb'] = athlete['pb']
+                    else:
+                        athlete['sb'] = athlete['pb']
+
+                    # Get recent competition results for profile
+                    if date_col and venue_col:
+                        try:
+                            recent = athlete_event_data.nlargest(5, date_col) if date_col else athlete_event_data.head(5)
+                            athlete['recent_results'] = recent[[date_col, venue_col, result_col]].to_dict('records')
+                        except:
+                            pass
+
+            updated_athletes.append(athlete)
+
+        return updated_athletes
+
+    except Exception as e:
+        st.sidebar.caption(f"Project East data: using cached ({str(e)[:30]})")
+        return PROJECT_EAST_ATHLETES
+
 with tab10:
     # Header with Asian Games branding
     st.markdown(f"""
@@ -3380,9 +4621,24 @@ with tab10:
     st.markdown("---")
     st.subheader("Medal Portfolio - 9 Elite Athletes")
 
+    # Fetch live data for athletes (cached with TTL)
+    @st.cache_data(ttl=3600)  # Cache for 1 hour
+    def load_project_east_athletes():
+        return get_project_east_live_data()
+
+    project_east_live = load_project_east_athletes()
+
+    # Show data status
+    data_status_col1, data_status_col2 = st.columns([3, 1])
+    with data_status_col2:
+        if DATA_CONNECTOR_AVAILABLE:
+            st.caption(f"Data: Live from rankings | Last refresh: {pd.Timestamp.now().strftime('%H:%M')}")
+        else:
+            st.caption("Data: Static (database unavailable)")
+
     # Create portfolio dataframe
     portfolio_data = []
-    for athlete in PROJECT_EAST_ATHLETES:
+    for athlete in project_east_live:
         is_800m = athlete['event'] == '800m'
 
         # Format times for 800m
@@ -3449,11 +4705,11 @@ with tab10:
     st.subheader("Individual Athlete Profiles")
 
     # Athlete selector
-    athlete_names = [a['name'] for a in PROJECT_EAST_ATHLETES]
+    athlete_names = [a['name'] for a in project_east_live]
     selected_athlete = st.selectbox("Select Athlete", athlete_names, key="project_east_athlete")
 
-    # Get selected athlete data
-    athlete_data = next((a for a in PROJECT_EAST_ATHLETES if a['name'] == selected_athlete), None)
+    # Get selected athlete data (using live data)
+    athlete_data = next((a for a in project_east_live if a['name'] == selected_athlete), None)
 
     if athlete_data:
         prof_cols = st.columns([2, 1])
@@ -3592,6 +4848,15 @@ with tab10:
 
         st.plotly_chart(fig_prog, use_container_width=True)
 
+        # Show recent competition results if available
+        if 'recent_results' in athlete_data and athlete_data['recent_results']:
+            st.markdown("#### Recent Competition Results")
+            recent_df = pd.DataFrame(athlete_data['recent_results'])
+            # Rename columns for display
+            col_rename = {'date': 'Date', 'venue': 'Competition', 'result': 'Result'}
+            recent_df = recent_df.rename(columns={k: v for k, v in col_rename.items() if k in recent_df.columns})
+            st.dataframe(recent_df, use_container_width=True, hide_index=True)
+
     # 4x100m Relay Speed Benchmark Section
     st.markdown("---")
     st.subheader("4x100m Relay Speed Benchmark")
@@ -3690,33 +4955,186 @@ with tab10:
     kpi_cols = st.columns(4)
 
     with kpi_cols[0]:
-        # Count athletes at/above medal standard
-        qualified_count = sum(1 for a in PROJECT_EAST_ATHLETES
+        # Count athletes at/above medal standard (using live data)
+        qualified_count = sum(1 for a in project_east_live
                             if (is_field_event(a['event']) and a['pb'] >= a['medal_standard']) or
                                (not is_field_event(a['event']) and a['pb'] <= a['medal_standard']))
         st.metric("Athletes at Medal Standard", f"{qualified_count}/9", delta=None)
 
     with kpi_cols[1]:
-        # Average gap to medal standard
+        # Average gap to medal standard (using live data)
         gaps = []
-        for a in PROJECT_EAST_ATHLETES:
+        for a in project_east_live:
             if is_field_event(a['event']):
                 gap_pct = ((a['medal_standard'] - a['pb']) / a['medal_standard']) * 100
             else:
                 gap_pct = ((a['pb'] - a['medal_standard']) / a['medal_standard']) * 100
             gaps.append(gap_pct)
-        avg_gap = sum(gaps) / len(gaps)
+        avg_gap = sum(gaps) / len(gaps) if gaps else 0
         st.metric("Avg Gap to Medal Std", f"{avg_gap:.1f}%", delta=None)
 
     with kpi_cols[2]:
-        # Medal favorites count
-        favorites = sum(1 for a in PROJECT_EAST_ATHLETES if a['status'] == 'medal_favorite')
+        # Medal favorites count (using live data)
+        favorites = sum(1 for a in project_east_live if a['status'] == 'medal_favorite')
         st.metric("Medal Favorites", favorites, delta=None)
 
     with kpi_cols[3]:
-        # Contenders count
-        contenders = sum(1 for a in PROJECT_EAST_ATHLETES if a['status'] == 'medal_contender')
+        # Contenders count (using live data)
+        contenders = sum(1 for a in project_east_live if a['status'] == 'medal_contender')
         st.metric("Medal Contenders", contenders, delta=None)
+
+###################################
+# Tab 11: Race Intelligence
+###################################
+with tab11:
+    st.markdown(f"""
+    <div style="background: linear-gradient(135deg, {TEAL_PRIMARY} 0%, {TEAL_DARK} 100%);
+         padding: 1.5rem; border-radius: 8px; margin-bottom: 1.5rem; border-left: 4px solid {GOLD_ACCENT};">
+        <h2 style="color: white; margin: 0;">🏁 Race Intelligence</h2>
+        <p style="color: rgba(255,255,255,0.9); margin: 0.5rem 0 0 0;">
+            Build race previews, analyze competitor form, and calculate advancement probabilities
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if not RACE_INTELLIGENCE_AVAILABLE:
+        st.warning("Race Intelligence module not available. Check race_intelligence.py")
+    else:
+        # Event and Championship selection
+        ri_col1, ri_col2, ri_col3 = st.columns(3)
+
+        with ri_col1:
+            ri_event = st.selectbox("Event", ['100m', '200m', '400m', '800m', '1500m'], key='ri_event')
+        with ri_col2:
+            ri_gender = st.selectbox("Gender", ['Men', 'Women'], key='ri_gender')
+        with ri_col3:
+            ri_championship = st.selectbox("Championship", ['Asian Games', 'World Championships', 'Olympics'], key='ri_champ')
+
+        st.markdown("---")
+
+        # Two sections
+        form_tab, preview_tab = st.tabs(["📊 Form Rankings", "🎯 Race Preview"])
+
+        with form_tab:
+            st.subheader("Current Form Rankings")
+            st.caption(f"Athletes ranked by current form, not just PB - {ri_event} {ri_gender}")
+
+            competitors = get_competitor_form_cards(ri_event, ri_gender, limit=20)
+
+            if competitors:
+                # Create DataFrame for display
+                form_data = []
+                for i, c in enumerate(competitors, 1):
+                    form_data.append({
+                        'Rank': i,
+                        'Athlete': c['athlete_name'],
+                        'NAT': c['country_code'],
+                        'Form': f"{c['form_score']:.0f} {c['form_icon']}",
+                        'Avg (5)': f"{c['avg_last_5']:.2f}",
+                        'PB': f"{c['pb']:.2f}" if c['pb'] else '-',
+                        'Last': f"{c['last_comp']['days_ago']}d" if c.get('last_comp') else '-'
+                    })
+
+                form_df = pd.DataFrame(form_data)
+
+                # Highlight KSA athletes
+                def highlight_ksa(row):
+                    if row['NAT'] == 'KSA':
+                        return [f'background-color: rgba(0, 84, 48, 0.2)'] * len(row)
+                    return [''] * len(row)
+
+                st.dataframe(
+                    form_df.style.apply(highlight_ksa, axis=1),
+                    use_container_width=True,
+                    hide_index=True,
+                    height=500
+                )
+            else:
+                st.info("No competitor data available for this event")
+
+        with preview_tab:
+            st.subheader("Race Preview Builder")
+            st.caption("Select athletes and see round-by-round advancement probabilities")
+
+            # Get available athletes
+            if competitors:
+                athlete_options = [f"{c['athlete_name']} ({c['country_code']})" for c in competitors[:15]]
+
+                selected_athletes = st.multiselect(
+                    "Select Athletes (max 8)",
+                    athlete_options,
+                    default=athlete_options[:4] if len(athlete_options) >= 4 else athlete_options,
+                    max_selections=8,
+                    key='ri_athletes'
+                )
+
+                if selected_athletes and st.button("Build Race Preview", type="primary"):
+                    # Build athlete data for preview
+                    preview_athletes = []
+                    for sel in selected_athletes:
+                        name = sel.split(' (')[0]
+                        country = sel.split('(')[1].replace(')', '') if '(' in sel else ''
+
+                        # Find in competitors
+                        for c in competitors:
+                            if c['athlete_name'] == name:
+                                preview_athletes.append({
+                                    'name': name,
+                                    'country': country,
+                                    'form_avg': c['avg_last_5']
+                                })
+                                break
+
+                    if preview_athletes:
+                        preview = build_race_preview(preview_athletes, ri_championship, ri_event)
+
+                        # Display results
+                        st.markdown(f"### {ri_championship} - {ri_event}")
+
+                        # Round standards
+                        standards = preview.get('standards', {})
+                        std_cols = st.columns(6)
+                        std_items = list(standards.items())
+                        for i, (round_name, std) in enumerate(std_items[:6]):
+                            with std_cols[i]:
+                                st.metric(round_name.title(), f"{std:.2f}")
+
+                        st.markdown("---")
+
+                        # Per-athlete probabilities
+                        for athlete in preview['athletes']:
+                            is_ksa = athlete['country'] == 'KSA'
+                            bg = 'rgba(0, 84, 48, 0.15)' if is_ksa else 'rgba(0,0,0,0.05)'
+
+                            probs = athlete['probabilities']
+
+                            st.markdown(f"""
+                            <div style="background: {bg}; padding: 1rem; margin: 0.5rem 0; border-radius: 8px;">
+                                <b>{athlete['name']}</b> ({athlete['country']}) - Form: {athlete['form_avg']:.2f}
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                            prob_cols = st.columns(6)
+                            prob_items = list(probs.items())
+                            for i, (round_name, prob_data) in enumerate(prob_items[:6]):
+                                with prob_cols[i]:
+                                    prob = prob_data['probability']
+                                    need = prob_data['need']
+                                    color = TEAL_PRIMARY if prob >= 70 else (GOLD_ACCENT if prob >= 40 else '#dc3545')
+                                    st.markdown(f"""
+                                    <div style="text-align: center; padding: 0.5rem; background: {color}; color: white; border-radius: 4px;">
+                                        <div style="font-size: 1.2rem; font-weight: bold;">{prob:.0f}%</div>
+                                        <div style="font-size: 0.8rem;">{round_name.title()}</div>
+                                        <div style="font-size: 0.7rem;">Need: {need:.2f}</div>
+                                    </div>
+                                    """, unsafe_allow_html=True)
+
+                            # Gap to bronze
+                            gap = athlete['gap_to_bronze']
+                            gap_color = TEAL_PRIMARY if gap <= 0 else '#dc3545'
+                            st.markdown(f"<p style='color: {gap_color}; font-size: 0.9rem;'>Gap to Bronze: {gap:+.2f}s</p>", unsafe_allow_html=True)
+            else:
+                st.info("No competitor data available. Try selecting a different event.")
 
 ###################################
 # Footer

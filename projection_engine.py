@@ -192,43 +192,110 @@ def apply_championship_adjustment(
         return projected / CHAMPIONSHIP_PRESSURE_FACTOR
 
 
-def calculate_form_score(performances: List[float], event_type: str = 'time') -> float:
+def calculate_form_score(
+    performances: List[float],
+    event_type: str = 'time',
+    pb: float = None,
+    last_comp_days: int = None
+) -> Dict:
     """
-    Calculate a normalized form score (0-100) based on recent performances.
-
-    Higher score = better current form relative to personal range.
+    Calculate comprehensive form score (0-100) with status.
 
     Components:
-    - Consistency: 40% (lower variance = higher score)
-    - Trend: 30% (improving = higher score)
-    - Recency: 30% (how close to PB)
+    - 40% weight: Recent average vs PB (closer = higher)
+    - 30% weight: Trend direction (improving/stable/declining)
+    - 20% weight: Recency of last competition (within 30 days = bonus)
+    - 10% weight: Consistency (low variance = bonus)
 
     Args:
-        performances: List of recent performances
+        performances: List of recent performances (most recent first)
         event_type: 'time', 'distance', or 'points'
+        pb: Personal best (optional, calculated from performances if not provided)
+        last_comp_days: Days since last competition (optional)
 
     Returns:
-        Form score from 0-100
+        Dict with 'score', 'status', 'icon', 'color', 'trend', 'avg_last_5', 'pb'
     """
     if len(performances) < 2:
-        return 50.0  # Neutral score if insufficient data
+        return {
+            'score': 50.0,
+            'status': 'Unknown',
+            'icon': '❓',
+            'color': '#78909C',
+            'trend': 'stable',
+            'avg_last_5': performances[0] if performances else 0,
+            'pb': performances[0] if performances else 0
+        }
 
-    current = performances[0]  # Most recent
-    best = min(performances) if event_type == 'time' else max(performances)
-    worst = max(performances) if event_type == 'time' else min(performances)
+    # Calculate PB if not provided
+    if pb is None:
+        pb = min(performances) if event_type == 'time' else max(performances)
 
-    if best == worst:
-        return 75.0  # Consistent = good form
+    current = performances[0]
+    avg_last_5 = sum(performances[:5]) / min(len(performances), 5)
 
-    # Normalize: how close is current to best?
+    # 1. PB proximity score (40%)
     if event_type == 'time':
-        # For time: lower is better, so invert
-        score = 100 * (worst - current) / (worst - best)
+        pb_score = max(0, 100 - ((current - pb) / pb * 100 * 10))
     else:
-        # For distance/points: higher is better
-        score = 100 * (current - worst) / (best - worst)
+        pb_score = max(0, 100 - ((pb - current) / pb * 100 * 10))
 
-    return max(0, min(100, score))
+    # 2. Trend score (30%)
+    trend = detect_trend(performances, event_type)
+    trend_scores = {'improving': 100, 'stable': 60, 'declining': 20}
+    trend_score = trend_scores.get(trend, 60)
+
+    # 3. Recency score (20%)
+    if last_comp_days is not None:
+        if last_comp_days <= 14:
+            recency_score = 100
+        elif last_comp_days <= 30:
+            recency_score = 80
+        elif last_comp_days <= 60:
+            recency_score = 50
+        else:
+            recency_score = 20
+    else:
+        recency_score = 60  # Neutral if unknown
+
+    # 4. Consistency score (10%)
+    if len(performances) >= 3:
+        import statistics
+        cv = statistics.stdev(performances) / statistics.mean(performances)
+        consistency_score = max(0, 100 - (cv * 500))  # Lower CV = higher score
+    else:
+        consistency_score = 50
+
+    # Weighted total
+    total_score = (
+        pb_score * 0.40 +
+        trend_score * 0.30 +
+        recency_score * 0.20 +
+        consistency_score * 0.10
+    )
+    total_score = max(0, min(100, total_score))
+
+    # Determine status and icon
+    if total_score >= 85 and (last_comp_days is None or last_comp_days <= 14):
+        status, icon, color = 'Hot', '🔥', '#005430'
+    elif total_score >= 70 and trend == 'improving':
+        status, icon, color = 'Rising', '📈', '#2A8F5C'
+    elif total_score >= 55:
+        status, icon, color = 'Stable', '──', '#a08e66'
+    elif total_score >= 40:
+        status, icon, color = 'Cooling', '📉', '#FFB800'
+    else:
+        status, icon, color = 'Cold', '❄️', '#dc3545'
+
+    return {
+        'score': round(total_score, 1),
+        'status': status,
+        'icon': icon,
+        'color': color,
+        'trend': trend,
+        'avg_last_5': round(avg_last_5, 2),
+        'pb': pb
+    }
 
 
 def calculate_gap(

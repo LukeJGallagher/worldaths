@@ -24,14 +24,15 @@ from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 
 
-# Team Saudi color palette
+# Team Saudi color palette - Official Saudi Green
 COLORS = {
-    'primary': '#007167',      # Primary teal
-    'gold': '#a08e66',         # Gold accent
-    'dark': '#005a51',         # Dark teal
-    'light': '#009688',        # Light teal
+    'primary': '#005430',      # Saudi Green (official PMS 3425 C)
+    'secondary': '#a08e66',    # Gold accent
+    'gold': '#a08e66',         # Gold accent (alias)
+    'dark': '#003d1f',         # Dark green
+    'light': '#2A8F5C',        # Light green
     'gray': '#78909C',         # Gray blue
-    'success': '#007167',      # Teal (positive)
+    'success': '#005430',      # Saudi Green (positive)
     'warning': '#FFB800',      # Gold/yellow
     'danger': '#dc3545',       # Red
     'medal_gold': '#FFD700',
@@ -42,17 +43,78 @@ COLORS = {
     'grid': 'lightgray'
 }
 
+# Chart typography - larger for presentations
+CHART_FONTS = {
+    'title': 20,
+    'axis': 14,
+    'legend': 13,
+    'annotation': 12,
+    'tick': 12
+}
+
 
 def get_base_layout() -> Dict:
     """Get base Plotly layout with Team Saudi styling."""
     return {
         'plot_bgcolor': COLORS['background'],
         'paper_bgcolor': COLORS['background'],
-        'font': {'family': 'Inter, sans-serif', 'color': COLORS['text']},
-        'margin': {'l': 60, 'r': 20, 't': 50, 'b': 50},
+        'font': {
+            'family': 'Inter, sans-serif',
+            'color': COLORS['text'],
+            'size': CHART_FONTS['tick']
+        },
+        'title': {'font': {'size': CHART_FONTS['title']}},
+        'margin': {'l': 60, 'r': 30, 't': 60, 'b': 50},
         'showlegend': True,
-        'legend': {'orientation': 'h', 'y': -0.15}
+        'legend': {
+            'orientation': 'h',
+            'y': -0.15,
+            'font': {'size': CHART_FONTS['legend']}
+        },
+        'xaxis': {'tickfont': {'size': CHART_FONTS['tick']}},
+        'yaxis': {'tickfont': {'size': CHART_FONTS['tick']}}
     }
+
+
+def get_performance_hovertemplate(include_venue: bool = True) -> str:
+    """Get rich hover template for performance charts."""
+    if include_venue:
+        return (
+            '<b>%{customdata[0]}</b><br>'
+            'Result: %{y:.2f}<br>'
+            'Venue: %{customdata[1]}<br>'
+            'Date: %{customdata[2]}<br>'
+            '<extra></extra>'
+        )
+    return (
+        '<b>%{x|%d %b %Y}</b><br>'
+        'Result: %{y:.2f}<br>'
+        '<extra></extra>'
+    )
+
+
+def add_medal_lines(fig: go.Figure, benchmarks: Dict[str, float], event_type: str = 'time'):
+    """Add gold/silver/bronze standard lines to a chart."""
+    medal_styles = {
+        'gold': {'color': COLORS['medal_gold'], 'dash': 'solid', 'width': 2, 'label': 'Gold'},
+        'silver': {'color': COLORS['medal_silver'], 'dash': 'dash', 'width': 2, 'label': 'Silver'},
+        'bronze': {'color': COLORS['medal_bronze'], 'dash': 'dot', 'width': 2, 'label': 'Bronze'},
+        'final': {'color': COLORS['gray'], 'dash': 'dashdot', 'width': 1.5, 'label': 'Final (8th)'}
+    }
+
+    for key, value in benchmarks.items():
+        if value is not None and key in medal_styles:
+            style = medal_styles[key]
+            fig.add_hline(
+                y=value,
+                line_dash=style['dash'],
+                line_color=style['color'],
+                line_width=style['width'],
+                annotation_text=f"{style['label']}: {value:.2f}",
+                annotation_position='right',
+                annotation_font_size=CHART_FONTS['annotation']
+            )
+    return fig
 
 
 def season_progression_chart(
@@ -581,6 +643,6 @@ def create_last_3_comps_display(
         else:
             result_str = f"{result:.2f}"
 
-        parts.append(f'<span style="background: #007167; color: white; padding: 2px 6px; border-radius: 4px; margin-right: 4px;">{result_str}</span>')
+        parts.append(f'<span style="background: #005430; color: white; padding: 2px 6px; border-radius: 4px; margin-right: 4px;">{result_str}</span>')
 
     return ' '.join(parts)
