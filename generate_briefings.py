@@ -174,6 +174,157 @@ Key competitors in events where KSA has ranked athletes.
     return briefing
 
 
+# Project East 2026 Athletes - Priority list for individual profiles
+PROJECT_EAST_ATHLETES = [
+    {"name": "ATAFI Abdulaziz Abdui", "events": "200m, 100m, 4x100m Relay", "gender": "Men", "dob": "02 DEC 2001"},
+    {"name": "AL HIZAM Hussain Asim", "events": "Pole Vault, 60m", "gender": "Men", "dob": "04 JAN 1998"},
+    {"name": "TOLU Mohammed Daoud B", "events": "Shot Put, Discus Throw", "gender": "Men", "dob": "30 MAR 2001"},
+    {"name": "BAKHEET Sami", "events": "Triple Jump, Long Jump", "gender": "Men", "dob": "06 DEC 2005"},
+    {"name": "MOHAMMED Abdullah Abkar", "events": "100m, 200m, 4x100m Relay", "gender": "Men", "dob": "01 JAN 1997"},
+    {"name": "AL JUMAH Baqer", "events": "110m Hurdles", "gender": "Men", "dob": "07 MAR 2001"},
+    {"name": "NASSER DAROUICHE Hassan", "events": "Triple Jump, Long Jump", "gender": "Men", "dob": "06 JUN 1991"},
+    {"name": "MULAHYI Abdullah Rizqallah", "events": "400m Hurdles, 110m Hurdles", "gender": "Men", "dob": "11 JUN 1990"},
+    {"name": "MAGHRABI Faisal", "events": "800m, 1500m", "gender": "Men", "dob": "11 APR 1999"},
+    {"name": "AL JADANI Abdulaziz Rabie", "events": "100m, 200m", "gender": "Men", "dob": "05 MAY 1996"},
+    {"name": "AL-MAJRASHI Ahmed Mabrouk", "events": "4x100m Relay, 100m, 200m", "gender": "Men", "dob": "25 NOV 1997"},
+    {"name": "ALSUBAIE Naif Rashid", "events": "400m Hurdles", "gender": "Men", "dob": "28 JUN 2007"},
+    {"name": "AL SABYANI Ismail Mohamed", "events": "4x400m Relay, 400m", "gender": "Men", "dob": "25 APR 1987"},
+    {"name": "FUTAYNI FUTUANI Ibrahim Mohammed", "events": "4x400m Relay, 400m", "gender": "Men", "dob": "13 JUN 1999"},
+    {"name": "ABU BAKR Azzam Ibrahim", "events": "400m Hurdles, 800m", "gender": "Men", "dob": "13 SEP 2004"},
+    {"name": "AL JADANI Raed", "events": "1500m, 800m, 3000m Steeplechase", "gender": "Men", "dob": "02 AUG 1996"},
+    {"name": "AL YAMI Sami Masoud", "events": "800m", "gender": "Men", "dob": "04 MAY 1999"},
+    {"name": "ALYAMI Mubarak Salem", "events": "100m, 200m", "gender": "Men", "dob": "30 APR 2008"},
+    {"name": "ALQAHTANI Mubarak Bader", "events": "100m, 200m", "gender": "Men", "dob": "24 SEP 2006"},
+    {"name": "HAZAZI Meshal Abdullah", "events": "200m, 400m", "gender": "Men", "dob": "12 FEB 2008"},
+    {"name": "HAZAZI Khalid Mohhamed", "events": "3000m Steeplechase, 5000m", "gender": "Men", "dob": "08 JAN 1989"},
+    {"name": "HAQAWI Saud Jaber", "events": "100m, 200m", "gender": "Men", "dob": "05 JAN 2006"},
+    {"name": "SUFYANI Idris Ayil", "events": "400m Hurdles, 400m", "gender": "Men", "dob": "13 MAR 1995"},
+    {"name": "ALZAHRANI Anbar Jamaan", "events": "200m, 400m", "gender": "Men", "dob": "13 MAR 2002"},
+    {"name": "HASSAN AL ASMARI Faisal", "events": "100m, Long Jump", "gender": "Men", "dob": "22 MAY 2008"},
+    {"name": "AL-SUBAIE Musaad Obaid", "events": "4x400m Relay, 400m", "gender": "Men", "dob": "20 FEB 2008"},
+    {"name": "ALDABBOUS Mohsen Hassan", "events": "Decathlon", "gender": "Men", "dob": "25 JUL 2000"},
+    {"name": "AHMED ADAM Abdulrahman", "events": "Long Jump, Triple Jump", "gender": "Men", "dob": "14 SEP 2008"},
+    {"name": "ALHUMAID Lujain Ibrahim", "events": "100m, 200m", "gender": "Women", "dob": "29 NOV 1999"},
+]
+
+
+def generate_individual_athlete_profiles() -> dict:
+    """Generate individual profile pages for Project East athletes."""
+    profiles = load_parquet("ksa_profiles.parquet")
+    benchmarks = load_parquet("benchmarks.parquet")
+    master = load_parquet("master.parquet")
+
+    today = datetime.now().strftime('%d %B %Y')
+
+    # Create athletes subdirectory
+    athletes_dir = BRIEFINGS_DIR / "athletes"
+    athletes_dir.mkdir(exist_ok=True)
+
+    generated = {}
+
+    for athlete in PROJECT_EAST_ATHLETES:
+        name = athlete["name"]
+        events = athlete["events"]
+        gender = athlete["gender"]
+        dob = athlete["dob"]
+
+        # Try to find in profiles data
+        name_parts = name.lower().split()
+        profile_match = None
+        if not profiles.empty:
+            for _, row in profiles.iterrows():
+                row_name = str(row.get('full_name', '')).lower()
+                if any(part in row_name for part in name_parts[:2]):
+                    profile_match = row
+                    break
+
+        # Calculate age
+        try:
+            from datetime import datetime as dt
+            birth_date = dt.strptime(dob, "%d %b %Y")
+            age = (dt.now() - birth_date).days // 365
+        except:
+            age = "N/A"
+
+        # Build profile content
+        profile = f"""# {name}
+*KSA Athletics - Project East 2026*
+*Profile generated: {today}*
+
+## Athlete Information
+- **Name**: {name}
+- **Country**: Saudi Arabia (KSA)
+- **Gender**: {gender}
+- **Date of Birth**: {dob}
+- **Age**: {age}
+- **Primary Events**: {events}
+
+"""
+
+        # Add ranking info if found
+        if profile_match is not None:
+            world_rank = profile_match.get('best_world_rank', 'N/A')
+            score = profile_match.get('best_score', 'N/A')
+            primary_event = profile_match.get('primary_event', events.split(',')[0])
+
+            profile += f"""## Current Rankings
+- **World Rank**: #{int(world_rank) if pd.notna(world_rank) else 'N/A'}
+- **WA Score**: {int(score) if pd.notna(score) else 'N/A'}
+- **Primary Event**: {primary_event}
+
+"""
+
+        # Add event-specific benchmarks
+        primary_event = events.split(',')[0].strip()
+        profile += f"""## Event Standards
+Target standards for {primary_event}:
+
+"""
+
+        if not benchmarks.empty:
+            # Find matching benchmark
+            event_bench = benchmarks[benchmarks['Event'].str.contains(primary_event.replace('m', ''), case=False, na=False)]
+            if not event_bench.empty:
+                bench = event_bench.iloc[0]
+                profile += f"""| Standard | Time/Distance |
+|----------|---------------|
+| Gold | {bench.get('Gold Standard', 'N/A')} |
+| Silver | {bench.get('Silver Standard', 'N/A')} |
+| Bronze | {bench.get('Bronze Standard', 'N/A')} |
+| Final (8th) | {bench.get('Final Standard (8th)', 'N/A')} |
+
+"""
+
+        # Add Asian Games 2026 section
+        profile += f"""## Asian Games 2026 Target
+- **Competition**: Aichi-Nagoya, Japan
+- **Dates**: September 19 - October 4, 2026
+- **Medal Target**: Based on current form and Asian rankings
+
+## Training Focus
+1. Event-specific technical development
+2. Competition experience at international level
+3. Peak performance timing for September 2026
+
+## Key Competitors (Asian Region)
+Athletes from China, Japan, India, Qatar, and Bahrain are primary competition in Asian Games.
+
+---
+*Part of Project East 2026 - KSA Athletics Medal Program*
+"""
+
+        # Generate safe filename
+        safe_name = name.lower().replace(' ', '_').replace("'", "")
+        filename = f"{safe_name}.md"
+        filepath = athletes_dir / filename
+
+        filepath.write_text(profile, encoding='utf-8')
+        generated[filename] = profile
+        print(f"  Created athlete profile: {filename}")
+
+    return generated
+
+
 def generate_asian_games_focus() -> str:
     """Generate Asian Games 2026 focus briefing."""
     profiles = load_parquet("ksa_profiles.parquet")
@@ -253,7 +404,13 @@ def generate_all_briefings():
     combined_path.write_text(combined, encoding='utf-8')
     print(f"  Created: {combined_path}")
 
+    # Generate individual athlete profiles
+    print("\nGenerating individual athlete profiles...")
+    athlete_profiles = generate_individual_athlete_profiles()
+    print(f"  Created {len(athlete_profiles)} athlete profiles")
+
     print(f"\nAll briefings saved to: {BRIEFINGS_DIR}")
+    print(f"Athlete profiles saved to: {BRIEFINGS_DIR / 'athletes'}")
     return briefings
 
 

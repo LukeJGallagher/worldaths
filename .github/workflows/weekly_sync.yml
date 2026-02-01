@@ -154,6 +154,16 @@ jobs:
                       blob.upload_blob(data, overwrite=True, content_settings=ContentSettings(content_type='text/markdown'))
                   print(f'Uploaded: athletics/{f}')
 
+          # Upload individual athlete profiles
+          athletes_dir = 'briefings/athletes'
+          if os.path.exists(athletes_dir):
+              for f in os.listdir(athletes_dir):
+                  if f.endswith('.md'):
+                      blob = container.get_blob_client(f'athletics/athletes/{f}')
+                      with open(f'{athletes_dir}/{f}', 'rb') as data:
+                          blob.upload_blob(data, overwrite=True, content_settings=ContentSettings(content_type='text/markdown'))
+                      print(f'Uploaded: athletics/athletes/{f}')
+
           print()
           print('Static website URL: Check Azure Portal for your storage account primary endpoint')
           print('Format: https://<storage-account>.z6.web.core.windows.net/')

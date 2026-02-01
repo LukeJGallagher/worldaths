@@ -22,6 +22,23 @@ python "SQL Converter2.py"               # Convert CSVs -> SQL/*.db
 python convert_to_parquet.py             # Convert to Parquet + upload to Azure
 ```
 
+### NotebookLM Briefings
+```bash
+python generate_briefings.py             # Generate briefings from Parquet data
+python generate_briefings.py --upload    # Generate + upload to NotebookLM
+
+# Manual upload (if auth expired, run: notebooklm login)
+notebooklm source add "briefings/00_combined_briefing.md" --notebook d7034cab-0282-4b95-b960-d8f5e40d90e1
+```
+
+**Generated Files:**
+- `briefings/00_combined_briefing.md` - All data combined
+- `briefings/01_athlete_overview.md` - Top 20 athletes by rank
+- `briefings/02_gap_analysis.md` - Gap to medal standards
+- `briefings/03_competitor_intelligence.md` - Key rivals
+- `briefings/04_asian_games_focus.md` - Project East 2026 targets
+- `briefings/athletes/*.md` - 29 individual athlete profiles
+
 ### Backup Management
 ```bash
 python backup_manager.py validate        # Check data before upload
@@ -120,11 +137,44 @@ personal-data/athletics/
 
 ### AI Chatbot (Tab 8)
 
-Uses OpenRouter free models via OpenAI SDK:
+**Three AI Backend Modes:**
+- **Hybrid** (Recommended): NotebookLM documents + Live database combined
+- **NotebookLM**: Fast, citation-backed answers from uploaded briefings/rulebooks
+- **OpenRouter**: General LLM with live Parquet data context
+
+**NotebookLM Integration:**
+```bash
+# Install (one-time)
+pip install notebooklm-py
+
+# Authenticate (opens browser for Google sign-in)
+notebooklm login
+
+# Check authentication status
+notebooklm list
+
+# Re-authenticate if expired
+notebooklm logout && notebooklm login
+```
+
+**NotebookLM Notebook ID:** `d7034cab-0282-4b95-b960-d8f5e40d90e1`
+
+**Upload briefings to NotebookLM:**
+```bash
+# Generate briefings from Parquet data
+python generate_briefings.py
+
+# Upload to NotebookLM (after authentication)
+notebooklm source add "briefings/00_combined_briefing.md" --notebook d7034cab-0282-4b95-b960-d8f5e40d90e1
+
+# Upload athlete profiles
+for f in briefings/athletes/*.md; do notebooklm source add "$f" --notebook d7034cab-0282-4b95-b960-d8f5e40d90e1; done
+```
+
+**OpenRouter Configuration:**
 - `OPENROUTER_API_KEY` in `.env` or Streamlit secrets
 - Default model: Llama 3.2 3B (fastest) - configurable in UI
 - RAG context from `AthleticsContextBuilder` class
-- Document semantic search via `document_rag.py` (sentence-transformers)
 
 **Performance Optimizations:**
 - **Response caching** with 5-minute TTL (`ResponseCache` class) - instant repeated queries
