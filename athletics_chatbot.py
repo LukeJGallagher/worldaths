@@ -29,7 +29,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 try:
     from data_connector import (
         get_ksa_athletes, get_rankings_data, get_ksa_rankings,
-        get_benchmarks_data, get_data_mode
+        get_benchmarks_data, get_data_mode, query
     )
     DATA_CONNECTOR_AVAILABLE = True
 except ImportError:
@@ -213,7 +213,7 @@ class AthleticsContextBuilder:
 
     def __init__(self):
         self._ksa_athletes = None
-        self._rankings = None
+        self._ksa_rankings = None
         self._benchmarks = None
         self._wittw = None
         self._data_loaded = False
@@ -233,15 +233,93 @@ class AthleticsContextBuilder:
 
     @property
     def rankings(self):
-        """Lazy load rankings only when needed."""
-        if self._rankings is None and DATA_CONNECTOR_AVAILABLE:
+        """Lazy load KSA rankings for backward compatibility."""
+        if self._ksa_rankings is None and DATA_CONNECTOR_AVAILABLE:
             try:
-                self._rankings = get_ksa_rankings()
-                logging.info(f"Lazy loaded {len(self._rankings) if self._rankings is not None else 0} ranking records")
+                self._ksa_rankings = get_ksa_rankings()
+                logging.info(f"Lazy loaded {len(self._ksa_rankings) if self._ksa_rankings is not None else 0} KSA ranking records")
             except Exception as e:
-                logging.error(f"Error loading rankings: {e}")
-                self._rankings = pd.DataFrame()
-        return self._rankings
+                logging.error(f"Error loading KSA rankings: {e}")
+                self._ksa_rankings = pd.DataFrame()
+        return self._ksa_rankings
+
+    def query_master(self, sql: str) -> pd.DataFrame:
+        """Execute SQL query against the full master database (2.3M+ records)."""
+        if not DATA_CONNECTOR_AVAILABLE:
+            return pd.DataFrame()
+        try:
+            return query(sql)
+        except Exception as e:
+            logging.error(f"Error querying master database: {e}")
+            return pd.DataFrame()
+
+    def get_event_world_rankings(self, event: str, gender: str = 'men', top_n: int = 20) -> pd.DataFrame:
+        """Get world rankings for an event from master database."""
+        gender_filter = "Men" if gender.lower() in ['men', 'male', 'm'] else "Women"
+        sql = f"""
+            SELECT competitor, nat, result, venue, date, rank
+            FROM master
+            WHERE event LIKE '%{event}%'
+              AND gender = '{gender_filter}'
+              AND result IS NOT NULL
+            ORDER BY
+                CASE
+                    WHEN result LIKE '%:%' THEN
+                        CAST(SPLIT_PART(result, ':', 1) AS DOUBLE) * 60 +
+                        CAST(REPLACE(SPLIT_PART(result, ':', 2), 's', '') AS DOUBLE)
+                    ELSE CAST(REPLACE(REPLACE(result, 'm', ''), 's', '') AS DOUBLE)
+                END ASC
+            LIMIT {top_n}
+        """
+        try:
+            return self.query_master(sql)
+        except:
+            # Fallback for field events (higher is better)
+            sql = f"""
+                SELECT competitor, nat, result, venue, date, rank
+                FROM master
+                WHERE event LIKE '%{event}%'
+                  AND gender = '{gender_filter}'
+                  AND result IS NOT NULL
+                ORDER BY result_numeric DESC NULLS LAST
+                LIMIT {top_n}
+            """
+            return self.query_master(sql)
+
+    def get_athlete_from_master(self, athlete_name: str) -> pd.DataFrame:
+        """Search for athlete in full master database."""
+        sql = f"""
+            SELECT competitor, event, result, venue, date, nat, rank, gender
+            FROM master
+            WHERE LOWER(competitor) LIKE LOWER('%{athlete_name}%')
+            ORDER BY date DESC
+            LIMIT 50
+        """
+        return self.query_master(sql)
+
+    def get_competition_results(self, competition: str, limit: int = 100) -> pd.DataFrame:
+        """Get results from a specific competition."""
+        sql = f"""
+            SELECT competitor, event, result, nat, pos, gender
+            FROM master
+            WHERE LOWER(venue) LIKE LOWER('%{competition}%')
+            ORDER BY event, pos
+            LIMIT {limit}
+        """
+        return self.query_master(sql)
+
+    def get_country_rankings(self, country: str, event: str = None, limit: int = 50) -> pd.DataFrame:
+        """Get rankings for athletes from a specific country."""
+        event_filter = f"AND event LIKE '%{event}%'" if event else ""
+        sql = f"""
+            SELECT competitor, event, result, venue, date, rank, gender
+            FROM master
+            WHERE UPPER(nat) = UPPER('{country}')
+            {event_filter}
+            ORDER BY date DESC
+            LIMIT {limit}
+        """
+        return self.query_master(sql)
 
     @property
     def benchmarks(self):
@@ -295,33 +373,38 @@ class AthleticsContextBuilder:
         return "\n".join(summary_parts)
 
     def get_athlete_details(self, athlete_name: str) -> str:
-        """Get detailed info about a specific athlete."""
-        if self.rankings is None or self.rankings.empty:
-            return f"No data found for {athlete_name}"
+        """Get detailed info about a specific athlete from full master database."""
+        # First try the master database (2.3M+ records)
+        matches = self.get_athlete_from_master(athlete_name)
 
-        # Search for athlete in rankings
-        name_cols = ['competitor', 'Athlete', 'full_name', 'Name']
-        df = self.rankings
-
-        for col in name_cols:
-            if col in df.columns:
-                matches = df[df[col].str.contains(athlete_name, case=False, na=False)]
-                if not matches.empty:
-                    break
-        else:
-            return f"No results found for '{athlete_name}'"
+        if matches.empty:
+            # Fall back to KSA rankings
+            if self.rankings is not None and not self.rankings.empty:
+                name_cols = ['competitor', 'Athlete', 'full_name', 'Name']
+                df = self.rankings
+                for col in name_cols:
+                    if col in df.columns:
+                        matches = df[df[col].str.contains(athlete_name, case=False, na=False)]
+                        if not matches.empty:
+                            break
 
         if matches.empty:
             return f"No results found for '{athlete_name}'"
 
         details = [f"## Performance Data: {athlete_name}\n"]
 
-        # Get column names
+        # Determine columns
         event_col = next((c for c in ['event', 'Event Type', 'Event'] if c in matches.columns), None)
         result_col = next((c for c in ['result', 'Result', 'Mark'] if c in matches.columns), None)
         venue_col = next((c for c in ['venue', 'Competition', 'Venue'] if c in matches.columns), None)
         date_col = next((c for c in ['date', 'Date'] if c in matches.columns), None)
         rank_col = next((c for c in ['rank', 'Rank', 'place'] if c in matches.columns), None)
+        nat_col = next((c for c in ['nat', 'Country', 'country'] if c in matches.columns), None)
+
+        # Show country if available
+        if nat_col and matches[nat_col].notna().any():
+            country = matches[nat_col].dropna().iloc[0] if not matches[nat_col].dropna().empty else 'Unknown'
+            details.append(f"**Country:** {country}\n")
 
         # Group by event
         if event_col:
@@ -340,23 +423,22 @@ class AthleticsContextBuilder:
         return "\n".join(details)
 
     def get_event_rankings(self, event: str, gender: str = 'men', top_n: int = 20) -> str:
-        """Get top rankings for an event."""
-        if self.rankings is None or self.rankings.empty:
-            return f"No rankings available for {event}"
+        """Get top world rankings for an event from master database."""
+        # First try the master database for world rankings
+        df = self.get_event_world_rankings(event, gender, top_n)
 
-        df = self.rankings.copy()
-
-        # Filter by event
-        event_col = next((c for c in ['event', 'Event Type', 'Event'] if c in df.columns), None)
-        if event_col:
-            df = df[df[event_col].str.contains(event, case=False, na=False)]
-
-        # Filter by gender if possible
-        gender_col = next((c for c in ['gender', 'Gender'] if c in df.columns), None)
-        if gender_col:
-            gender_val = 'M' if gender.lower() in ['men', 'male', 'm'] else 'F'
-            df = df[(df[gender_col].str.upper() == gender_val) |
-                    (df[gender_col].str.lower() == gender.lower())]
+        if df.empty:
+            # Fall back to KSA rankings
+            if self.rankings is not None and not self.rankings.empty:
+                df = self.rankings.copy()
+                event_col = next((c for c in ['event', 'Event Type', 'Event'] if c in df.columns), None)
+                if event_col:
+                    df = df[df[event_col].str.contains(event, case=False, na=False)]
+                gender_col = next((c for c in ['gender', 'Gender'] if c in df.columns), None)
+                if gender_col:
+                    gender_val = 'M' if gender.lower() in ['men', 'male', 'm'] else 'F'
+                    df = df[(df[gender_col].str.upper() == gender_val) |
+                            (df[gender_col].str.lower() == gender.lower())]
 
         if df.empty:
             return f"No results for {event} ({gender})"
@@ -365,15 +447,18 @@ class AthleticsContextBuilder:
         name_col = next((c for c in ['competitor', 'Name', 'Athlete'] if c in df.columns), None)
         result_col = next((c for c in ['result', 'Result', 'Mark', 'Score'] if c in df.columns), None)
         country_col = next((c for c in ['nat', 'Country', 'country'] if c in df.columns), None)
+        venue_col = next((c for c in ['venue', 'Competition', 'Venue'] if c in df.columns), None)
 
-        rankings = [f"## Top {top_n} in {event} ({gender.title()})\n"]
+        rankings = [f"## World Top {min(top_n, len(df))} in {event} ({gender.title()})\n"]
 
         for i, (_, row) in enumerate(df.head(top_n).iterrows(), 1):
             name = row.get(name_col, 'Unknown') if name_col else 'Unknown'
             result = row.get(result_col, 'N/A') if result_col else 'N/A'
             country = row.get(country_col, '') if country_col else ''
+            venue = row.get(venue_col, '') if venue_col else ''
             country_str = f" ({country})" if country else ""
-            rankings.append(f"{i}. {name}{country_str} - {result}")
+            venue_str = f" @ {venue}" if venue else ""
+            rankings.append(f"{i}. {name}{country_str} - {result}{venue_str}")
 
         return "\n".join(rankings)
 
@@ -434,10 +519,31 @@ class AthleticsContextBuilder:
             return f"Error analyzing {event}: {str(e)}"
 
     def search_by_keyword(self, keyword: str) -> str:
-        """Search data by keyword for flexible queries."""
+        """Search data by keyword in master database (2.3M+ records)."""
         results = []
 
-        # Search in KSA athletes
+        # Search in master database first (full 2.3M records)
+        try:
+            # Search in competitor names
+            sql = f"""
+                SELECT competitor, event, result, nat, venue, date
+                FROM master
+                WHERE LOWER(competitor) LIKE LOWER('%{keyword}%')
+                   OR LOWER(venue) LIKE LOWER('%{keyword}%')
+                   OR LOWER(event) LIKE LOWER('%{keyword}%')
+                   OR LOWER(nat) LIKE LOWER('%{keyword}%')
+                ORDER BY date DESC
+                LIMIT 20
+            """
+            matches = self.query_master(sql)
+            if not matches.empty:
+                results.append(f"## Master Database Results ({len(matches)} shown)\n")
+                for _, row in matches.iterrows():
+                    results.append(f"- {row.get('competitor', 'Unknown')} ({row.get('nat', '')}) - {row.get('event', '')} - {row.get('result', '')} @ {row.get('venue', '')} ({row.get('date', '')})")
+        except Exception as e:
+            logging.error(f"Error searching master database: {e}")
+
+        # Also search in KSA athletes for context
         if self.ksa_athletes is not None and not self.ksa_athletes.empty:
             for col in self.ksa_athletes.columns:
                 if self.ksa_athletes[col].dtype == 'object':
@@ -445,22 +551,11 @@ class AthleticsContextBuilder:
                         self.ksa_athletes[col].str.contains(keyword, case=False, na=False)
                     ]
                     if not matches.empty:
-                        results.append(f"Found {len(matches)} matches in KSA athletes ({col})")
+                        results.append(f"\n## KSA Athletes ({len(matches)} matches)")
                         for _, row in matches.head(5).iterrows():
-                            results.append(f"  - {row.to_dict()}")
-                        break
-
-        # Search in rankings
-        if self.rankings is not None and not self.rankings.empty:
-            for col in self.rankings.columns:
-                if self.rankings[col].dtype == 'object':
-                    matches = self.rankings[
-                        self.rankings[col].str.contains(keyword, case=False, na=False)
-                    ]
-                    if not matches.empty:
-                        results.append(f"\nFound {len(matches)} matches in rankings ({col})")
-                        for _, row in matches.head(10).iterrows():
-                            results.append(f"  - {row.to_dict()}")
+                            name = row.get('full_name', row.get('competitor', 'Unknown'))
+                            event = row.get('primary_event', row.get('event', ''))
+                            results.append(f"  - {name} ({event})")
                         break
 
         if not results:
@@ -577,6 +672,29 @@ class AthleticsContextBuilder:
             context_parts.append(self.get_ksa_athlete_summary())
             sources.append("KSA Athletes Database")
 
+        # Check for country/competitor analysis (using master database)
+        country_codes = {
+            'usa': 'USA', 'united states': 'USA', 'america': 'USA',
+            'jamaica': 'JAM', 'kenya': 'KEN', 'ethiopia': 'ETH',
+            'japan': 'JPN', 'china': 'CHN', 'india': 'IND',
+            'qatar': 'QAT', 'bahrain': 'BRN', 'uae': 'UAE',
+            'iran': 'IRI', 'morocco': 'MAR', 'south africa': 'RSA',
+            'great britain': 'GBR', 'britain': 'GBR', 'uk': 'GBR',
+            'germany': 'GER', 'france': 'FRA', 'italy': 'ITA',
+            'spain': 'ESP', 'netherlands': 'NED', 'poland': 'POL',
+            'australia': 'AUS', 'canada': 'CAN', 'brazil': 'BRA',
+            'nigeria': 'NGR', 'cuba': 'CUB', 'sweden': 'SWE'
+        }
+        for country_name, code in country_codes.items():
+            if country_name in query_lower:
+                country_data = self.get_country_rankings(code, detected_event)
+                if not country_data.empty:
+                    context_parts.append(f"## {code} Athletes Performance\n")
+                    for _, row in country_data.head(15).iterrows():
+                        context_parts.append(f"- {row.get('competitor', 'Unknown')} - {row.get('event', '')} - {row.get('result', '')} ({row.get('date', '')})")
+                    sources.append(f"Master Database: {code} Athletes")
+                break
+
         # If no specific context found, do a keyword search
         if len(context_parts) <= 1:  # Only has base knowledge
             # Extract potential keywords (words > 3 chars that aren't common)
@@ -591,6 +709,19 @@ class AthleticsContextBuilder:
                     break
 
         return "\n\n---\n\n".join(context_parts), sources
+
+    def build_context(self, query: str, knowledge_source: str = "Database Only") -> str:
+        """
+        Compatibility wrapper for build_context_for_query.
+        Returns just the context string (not sources).
+        Used by OpenRouterClient in World_Ranking_Deploy_v3.py.
+
+        Args:
+            query: User's question
+            knowledge_source: Ignored (kept for API compatibility)
+        """
+        context, _ = self.build_context_for_query(query)
+        return context
 
 
 ###################################

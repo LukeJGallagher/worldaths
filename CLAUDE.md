@@ -4,21 +4,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-World Athletics data scraping and visualization system for Team Saudi. Scrapes athlete rankings, results, and qualification data from worldathletics.org, stores in Parquet/SQLite databases, and displays via Streamlit dashboards with 9 analytics tabs including an AI chatbot and Coach View.
+World Athletics data scraping and visualization system for Team Saudi. Scrapes athlete rankings, results, and qualification data from worldathletics.org, stores in Parquet/SQLite databases, and displays via Streamlit dashboards with 10 analytics tabs including an AI chatbot with document RAG, Coach View, and Project East 2026 strategy planning.
 
 ## Common Commands
 
 ### Running Dashboards
 ```bash
 streamlit run World_Ranking_Dash.py      # Local development
-streamlit run World_Ranking_Deploy_v3.py # Production version (9 tabs with AI + Coach View)
+streamlit run World_Ranking_Deploy_v3.py # Production version (10 tabs)
 ```
 
 ### Data Pipeline (in order)
 ```bash
-python "World Rankings_All.py"           # Scrape global rankings → Data/*.csv
-python "World Rankings_KSA_Ave_both.py"  # Scrape KSA athlete details → Data/*.csv
-python "SQL Converter2.py"               # Convert CSVs → SQL/*.db
+python "World Rankings_All.py"           # Scrape global rankings -> Data/*.csv
+python "World Rankings_KSA_Ave_both.py"  # Scrape KSA athlete details -> Data/*.csv
+python "SQL Converter2.py"               # Convert CSVs -> SQL/*.db
 python convert_to_parquet.py             # Convert to Parquet + upload to Azure
 ```
 
@@ -31,32 +31,38 @@ python backup_manager.py baseline        # Create protected snapshot
 python backup_manager.py restore --baseline  # Restore from baseline
 ```
 
+### Testing Data Connector
+```bash
+python data_connector.py                 # Run diagnostics and sample queries
+```
+
 ## Architecture
 
-### Dashboard Structure (9 Tabs)
+### Dashboard Structure (10 Tabs)
 
 | Tab | Name | Key Module/Function |
 |-----|------|---------------------|
-| 1 | Event Standards & Progression | `WhatItTakesToWin` class |
-| 2 | Athlete Profiles | `get_ksa_athletes()` |
-| 3 | Combined Rankings | `get_rankings_data()` |
-| 4 | Saudi Athletes Rankings | `get_ksa_rankings()` |
-| 5 | World Champs Qualification | `get_road_to_tokyo_data()` |
+| 1 | Event Standards & Progression | `WhatItTakesToWin` class - championship filtering, 1-8th progression |
+| 2 | Athlete Profiles | `get_ksa_athletes()` - WPA ranking points, multi-event summary |
+| 3 | Combined Rankings | `get_rankings_data()` - paginated, sorted by rank |
+| 4 | Saudi Athletes Rankings | `get_ksa_rankings()` - country comparison |
+| 5 | World Champs Qualification | `get_road_to_tokyo_data()` - near miss alerts |
 | 6 | Major Games Analytics | `MajorGamesAnalyzer` class |
 | 7 | What It Takes to Win (Live) | `WhatItTakesToWin.generate_report()` |
-| 8 | AI Analyst | `OpenRouterClient` (free LLM models) |
-| 9 | Coach View | `render_coach_view()` (competition prep, projections) |
+| 8 | AI Analyst | `OpenRouterClient` + `DocumentRAG` for semantic search |
+| 9 | Coach View | `render_coach_view()` - competition prep, projections |
+| 10 | Project East 2026 | Asian Games strategy with cached data loading |
 
 ### Data Flow
 ```
 worldathletics.org (Selenium scrapers)
-        ↓
+        |
    Data/*.csv (raw scraped data)
-        ↓
+        |
    Data/parquet/*.parquet (modern) OR SQL/*.db (legacy)
-        ↓
-   Azure Blob Storage (athletics/)  ← for Streamlit Cloud
-        ↓
+        |
+   Azure Blob Storage (athletics/)  <- for Streamlit Cloud
+        |
    Streamlit Dashboard (DuckDB queries Parquet directly)
 ```
 
@@ -64,45 +70,93 @@ worldathletics.org (Selenium scrapers)
 
 | File | Purpose |
 |------|---------|
-| `World_Ranking_Deploy_v3.py` | Main dashboard with 8 tabs |
-| `data_connector.py` | DuckDB wrapper - Azure/local dual-mode |
-| `athletics_analytics_agents.py` | Analytics classes (SprintsAnalyzer, MajorGamesAnalyzer, etc.) |
+| `World_Ranking_Deploy_v3.py` | Main dashboard with 10 tabs |
+| `data_connector.py` | DuckDB wrapper - Azure/local dual-mode with TTL caching |
+| `athletics_analytics_agents.py` | Analytics classes (SprintsAnalyzer, MajorGamesAnalyzer) |
+| `athletics_chatbot.py` | AI chatbot with OpenRouter LLM integration |
+| `document_rag.py` | RAG module for semantic search over PDFs and Parquet data |
 | `what_it_takes_to_win.py` | `WhatItTakesToWin` class for medal standards |
-| `convert_to_parquet.py` | CSV/DB → Parquet + Azure upload |
+| `coach_view.py` | Competition prep, athlete reports, competitor watch |
+| `convert_to_parquet.py` | CSV/DB -> Parquet + Azure upload |
 | `backup_manager.py` | Backup validation, retention, restore |
 
 ### data_connector.py Key Functions
 ```python
-get_ksa_athletes()           # KSA athlete profiles
+# Core data access
+get_ksa_athletes()           # KSA athlete profiles (sorted by world rank)
 get_rankings_data()          # Global rankings (2.3M records)
-get_ksa_rankings()           # KSA-filtered rankings
+get_ksa_rankings()           # KSA-filtered rankings from master
 get_benchmarks_data()        # Championship standards
-get_road_to_tokyo_data()     # Qualification data
-get_competitors()            # Top competitors by event
-get_head_to_head()           # H2H comparison
+get_road_to_tokyo_data()     # Qualification tracking data
+
+# Analysis helpers
+get_competitors()            # Top competitors by event/gender/season
+get_head_to_head()           # H2H comparison between athletes
 get_gap_analysis()           # Gap to qualification standards
+get_athlete_results()        # Competition results for an athlete
+get_event_list()             # Unique events in database
+get_country_list()           # Unique countries in database
+
+# Utilities
 get_data_mode()              # Returns 'azure' or 'local'
 query(sql)                   # Raw DuckDB SQL query
+clear_cache()                # Clear TTL cache
+get_cache_status()           # Debug cache state
+test_connection()            # Diagnostics
 ```
 
 ### Azure Blob Structure
 ```
 personal-data/athletics/
-├── master.parquet          # 2.3M scraped records
-├── ksa_profiles.parquet    # 152 KSA athlete profiles
-├── benchmarks.parquet      # Championship standards
-├── road_to_tokyo.parquet   # Qualification tracking
-├── baseline/               # Protected backups (never auto-deleted)
-└── backups/                # Rolling backups (7 daily, 4 weekly)
+├── master.parquet           # 2.3M scraped records
+├── ksa_profiles.parquet     # 152 KSA athlete profiles
+├── benchmarks.parquet       # Championship standards
+├── road_to_tokyo.parquet    # Qualification tracking
+├── documents/               # PDF rulebooks for RAG
+├── embeddings/              # Vector embeddings for semantic search
+├── baseline/                # Protected backups (never auto-deleted)
+└── backups/                 # Rolling backups (7 daily, 4 weekly)
 ```
 
 ### AI Chatbot (Tab 8)
 
 Uses OpenRouter free models via OpenAI SDK:
 - `OPENROUTER_API_KEY` in `.env` or Streamlit secrets
-- Free models: DeepSeek R1 70B, Llama 3.1, Gemma 2, Mistral 7B, Qwen 2
+- Default model: Llama 3.2 3B (fastest) - configurable in UI
 - RAG context from `AthleticsContextBuilder` class
-- **Note**: `st.chat_input()` doesn't work in tabs - uses `st.text_input()` + button
+- Document semantic search via `document_rag.py` (sentence-transformers)
+
+**Performance Optimizations:**
+- **Response caching** with 5-minute TTL (`ResponseCache` class) - instant repeated queries
+- **Query intent classification** (`classify_query_intent()`) - builds smaller context for simple queries
+- **Lazy RAG loading** - only loads embeddings when "Rulebooks" knowledge source selected
+- Streaming responses for real-time display (no waiting for full response)
+- Context caching (FIFO, 50 entries max)
+- Filter dropdown caching via `get_ai_filter_options()` (30 min TTL)
+- Temperature 0.3 for factual analytics (reduced hallucination)
+
+**Query Intent Types:**
+- `athlete` - Detects KSA athlete names, focuses context on athlete data
+- `event` - Detects event names (100m, pole vault, etc.), focuses on rankings
+- `standards` - Qualification/medal keywords, includes benchmarks
+- `comparison` - vs/compare/gap keywords, includes both rankings and benchmarks
+- `general` - Uses minimal context for faster response
+
+**Quick Action Buttons:**
+- Medal Gap Analysis - Gaps to Asian Games medal standards
+- Top Rivals - Key Asian competitors
+- Form Trends - Recent performance analysis
+- Qualification Status - Progress toward entry standards
+
+**Available Models:**
+- Llama 3.2 3B (Fastest)
+- DeepSeek Chat v3 (Fast)
+- Gemini 2.0 Flash (Google)
+- Llama 3.3 70B (Best Quality)
+- Qwen 2.5 VL 7B (Multilingual)
+- DeepSeek R1 (Reasoning)
+
+**Note**: `st.chat_input()` doesn't work in tabs - uses `st.text_input()` + button
 
 ## Environment Variables
 
@@ -140,13 +194,16 @@ OPENROUTER_API_KEY=...               # For AI chatbot (Tab 8)
 
 ## Team Saudi Theme
 
+**Official Brand Colors** (use these, not teal):
 ```python
-TEAL_PRIMARY = '#007167'   # Main brand color, headers
-GOLD_ACCENT = '#a08e66'    # Highlights, PB markers
-TEAL_DARK = '#005a51'      # Hover states, gradients
-TEAL_LIGHT = '#009688'     # Secondary positive
-GRAY_BLUE = '#78909C'      # Neutral
+SAUDI_GREEN = '#005430'       # Official PMS 3425 C - Main brand color
+GOLD_ACCENT = '#a08e66'       # Highlights, PB markers
+SAUDI_GREEN_DARK = '#003d1f'  # Hover states, gradients
+SAUDI_GREEN_LIGHT = '#2A8F5C' # Secondary positive
+GRAY_BLUE = '#78909C'         # Neutral
 ```
+
+See global `CLAUDE.md` for full theme documentation including header templates, metric cards, and Plotly styling.
 
 ## GitHub Actions Workflows
 
@@ -156,7 +213,7 @@ GRAY_BLUE = '#78909C'      # Neutral
 | `backup_baseline.yml` | Manual | Create protected baseline snapshot |
 | `restore_backup.yml` | Manual | Restore from backup or baseline |
 
-## Coach View Module (NEW)
+## Coach View Module
 
 Analytics modules ported from Tilastopaja project:
 
@@ -184,6 +241,27 @@ cd ..
 python merge_historical_and_upload.py --dry-run  # Preview merge
 python merge_historical_and_upload.py            # Merge + upload to Azure
 ```
+
+## Known Issues / Notes
+
+- Championship key mismatch: Use `'World Champs'` not `'World Championships'` in qualification tab filters
+- `st.chat_input()` doesn't work inside tabs - chatbot uses `st.text_input()` with button
+- DuckDB Azure extension has SSL issues on Streamlit Cloud - use `_download_parquet_from_azure()` instead
+- **Column naming**: `pos` column has finishing positions (1, 2, 3...), `rank` column has world ranking numbers (1012, 4954...)
+- **Event name formats**: Dropdowns show '100m' but data uses '100-metres' - use normalized matching with regex
+- **Theme colors**: Code uses `TEAL_PRIMARY = '#007167'`, not the official Saudi green `#005430` - both are acceptable
+
+## Performance Notes
+
+**Startup Time Optimization:**
+- `sentence_transformers` import is now lazy-loaded in `document_rag.py` (saves ~12 seconds)
+- Model `SentenceTransformer('all-MiniLM-L6-v2')` only loads on first RAG search (saves ~30 seconds)
+- Azure Parquet downloads are cached with TTL - first load takes ~10-15 seconds per file
+
+**Known Bottlenecks:**
+- Initial Azure data load: ~30-40 seconds total for all parquet files (network latency)
+- master.parquet: 33MB, downloads in ~10 chunks
+- First page render after data load can be slow due to Streamlit rerun
 
 ## Additional Documentation
 

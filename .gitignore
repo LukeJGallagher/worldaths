@@ -11,6 +11,8 @@
 *.parquet
 Data/
 SQL/
+briefings/
+documents/
 
 # Large backup/archive folders
 Archive/

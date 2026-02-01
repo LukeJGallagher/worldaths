@@ -89,6 +89,76 @@ jobs:
           cleanup_old_backups(container)
           "
 
+      - name: Generate NotebookLM briefings
+        env:
+          AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+        run: |
+          echo "Generating briefings for NotebookLM..."
+          python generate_briefings.py
+          echo "Briefings generated in briefings/ folder"
+          ls -la briefings/
+
+      - name: Upload briefings to Azure Static Website
+        env:
+          AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+        run: |
+          echo "Uploading briefings to Azure $web container..."
+          python -c "
+          from azure.storage.blob import BlobServiceClient, ContentSettings
+          import os
+          from datetime import datetime
+
+          conn_str = os.environ['AZURE_STORAGE_CONNECTION_STRING']
+          blob_service = BlobServiceClient.from_connection_string(conn_str)
+
+          # Use \$web container for static website hosting
+          container = blob_service.get_container_client('\$web')
+
+          # Create index.html
+          index_html = '''<!DOCTYPE html>
+          <html>
+          <head>
+            <title>KSA Athletics Intelligence</title>
+            <meta charset=\"UTF-8\">
+            <style>
+              body { font-family: Inter, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; background: #f8f9fa; }
+              h1 { color: #007167; }
+              .card { background: white; padding: 20px; margin: 15px 0; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); border-left: 4px solid #007167; }
+              a { color: #007167; text-decoration: none; font-weight: 500; }
+              a:hover { text-decoration: underline; }
+              .updated { color: #666; font-size: 0.9em; margin-bottom: 20px; }
+              pre { background: #f5f5f5; padding: 15px; overflow-x: auto; border-radius: 4px; }
+            </style>
+          </head>
+          <body>
+            <h1>KSA Athletics Intelligence</h1>
+            <p class=\"updated\">Last updated: ''' + datetime.now().strftime('%d %B %Y %H:%M UTC') + '''</p>
+            <div class=\"card\"><a href=\"athletics/00_combined_briefing.md\">Combined Briefing (All Data)</a><p>Complete overview of all KSA athletes, rankings, and analysis</p></div>
+            <div class=\"card\"><a href=\"athletics/01_athlete_overview.md\">Athlete Overview</a><p>Top 20 athletes by world ranking, grouped by event</p></div>
+            <div class=\"card\"><a href=\"athletics/02_gap_analysis.md\">Gap Analysis</a><p>Gaps to medal standards at major championships</p></div>
+            <div class=\"card\"><a href=\"athletics/03_competitor_intelligence.md\">Competitor Intelligence</a><p>Key rivals in priority events</p></div>
+            <div class=\"card\"><a href=\"athletics/04_asian_games_focus.md\">Asian Games 2026 Focus</a><p>Project East medal targets and strategy</p></div>
+          </body>
+          </html>'''
+
+          # Upload index.html
+          blob = container.get_blob_client('index.html')
+          blob.upload_blob(index_html, overwrite=True, content_settings=ContentSettings(content_type='text/html'))
+          print('Uploaded: index.html')
+
+          # Upload briefings
+          for f in os.listdir('briefings'):
+              if f.endswith('.md'):
+                  blob = container.get_blob_client(f'athletics/{f}')
+                  with open(f'briefings/{f}', 'rb') as data:
+                      blob.upload_blob(data, overwrite=True, content_settings=ContentSettings(content_type='text/markdown'))
+                  print(f'Uploaded: athletics/{f}')
+
+          print()
+          print('Static website URL: Check Azure Portal for your storage account primary endpoint')
+          print('Format: https://<storage-account>.z6.web.core.windows.net/')
+          "
+
       - name: Report status
         if: always()
         env:
