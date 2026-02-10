@@ -107,12 +107,14 @@ jobs:
 
       - name: Upload profile database
         uses: actions/upload-artifact@v4
+        if: hashFiles('SQL/ksa_athlete_profiles.db') != ''
         with:
           name: ksa-profiles-${{ github.run_number }}
           path: |
             SQL/ksa_athlete_profiles.db
             SQL/KSA_complete_profiles.csv
           retention-days: 30
+          if-no-files-found: warn
 
       - name: Commit and push updated profiles
         run: |
@@ -178,12 +180,20 @@ jobs:
 
       - name: Download profile artifact
         uses: actions/download-artifact@v4
+        id: download
+        continue-on-error: true
         with:
           name: ksa-profiles-${{ github.run_number }}
           path: ./artifacts
 
       - name: Sync to Azure (placeholder)
+        if: steps.download.outcome == 'success'
         run: |
           echo "Azure sync would happen here"
           echo "Profile database ready for deployment"
           ls -la ./artifacts/
+
+      - name: Skip sync (no artifact)
+        if: steps.download.outcome != 'success'
+        run: |
+          echo "No profile artifact found - scraping may have failed. Skipping Azure sync."
