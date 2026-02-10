@@ -13,15 +13,23 @@ Usage:
 """
 
 import os
+import subprocess
+import sys
 import duckdb
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 # Paths
 BASE_DIR = Path(__file__).parent
 PARQUET_DIR = BASE_DIR / "Data" / "parquet"
 BRIEFINGS_DIR = BASE_DIR / "briefings"
+MEDIA_DIR = BRIEFINGS_DIR / "media"
+
+# NotebookLM Configuration
+NOTEBOOK_ID = "d7034cab-0282-4b95-b960-d8f5e40d90e1"
+NOTEBOOK_NAME = "KSA Athletics Intelligence"
 
 # Ensure briefings directory exists
 BRIEFINGS_DIR.mkdir(exist_ok=True)
@@ -414,37 +422,330 @@ def generate_all_briefings():
     return briefings
 
 
-def upload_to_notebooklm():
-    """Upload briefings to NotebookLM using notebooklm-py."""
+def _upload_single_file(filepath: Path, notebook_id: str) -> bool:
+    """Upload a single file to NotebookLM. Python API first, CLI fallback."""
+    print(f"  Uploading: {filepath.relative_to(BASE_DIR)}")
+
+    # Try Python API first
     try:
         from notebooklm import NotebookLM
+        nlm = NotebookLM()
+        nlm.source_add(str(filepath), notebook=notebook_id)
+        print(f"    OK")
+        return True
     except ImportError:
-        print("notebooklm-py not installed. Install with: pip install notebooklm-py")
-        print("Then run: notebooklm login")
+        pass
+    except Exception as e:
+        print(f"    API error: {e}, trying CLI...")
+
+    # Fallback to CLI
+    try:
+        result = subprocess.run(
+            ["notebooklm", "source", "add", str(filepath), "--notebook", notebook_id],
+            capture_output=True, text=True, timeout=60
+        )
+        if result.returncode == 0:
+            print(f"    OK (CLI)")
+            return True
+        else:
+            print(f"    CLI error: {result.stderr.strip()}")
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        print(f"    Failed: {e}")
+
+    return False
+
+
+def upload_all_to_notebooklm(include_docs: bool = False,
+                              notebook_id: str = NOTEBOOK_ID) -> dict:
+    """Upload ALL briefings (including athlete profiles) to NotebookLM.
+
+    Returns dict with counts: {'briefings': N, 'athletes': N, 'documents': N, 'failed': N}
+    """
+    results = {'briefings': 0, 'athletes': 0, 'documents': 0, 'failed': 0}
+
+    print(f"Uploading to NotebookLM notebook: {notebook_id}")
+
+    # 1. Upload root briefings (briefings/*.md)
+    for file in sorted(BRIEFINGS_DIR.glob("*.md")):
+        if _upload_single_file(file, notebook_id):
+            results['briefings'] += 1
+        else:
+            results['failed'] += 1
+
+    # 2. Upload athlete profiles (briefings/athletes/*.md)
+    athletes_dir = BRIEFINGS_DIR / "athletes"
+    if athletes_dir.exists():
+        for file in sorted(athletes_dir.glob("*.md")):
+            if _upload_single_file(file, notebook_id):
+                results['athletes'] += 1
+            else:
+                results['failed'] += 1
+
+    # 3. Optionally upload PDF documents
+    if include_docs:
+        documents_dir = BASE_DIR / "documents"
+        if documents_dir.exists():
+            for file in sorted(documents_dir.glob("*.pdf")):
+                if _upload_single_file(file, notebook_id):
+                    results['documents'] += 1
+                else:
+                    results['failed'] += 1
+
+    return results
+
+
+def _generate_media_cli(media_type: str, notebook_id: str,
+                        instructions: str = None) -> bool:
+    """Generate media using notebooklm CLI."""
+    cmd = ["notebooklm", "generate", media_type]
+
+    if media_type == 'audio' and instructions:
+        cmd.append(instructions)
+
+    cmd.extend(["--wait", "--notebook", notebook_id])
+
+    if media_type == 'video':
+        cmd.extend(["--style", "whiteboard"])
+    elif media_type == 'infographic':
+        cmd.extend(["--orientation", "portrait"])
+
+    try:
+        print(f"  Generating {media_type} via CLI (this may take several minutes)...")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        if result.returncode == 0:
+            print(f"  {media_type.title()} generated!")
+            return True
+        else:
+            print(f"  Error: {result.stderr.strip()}")
+    except subprocess.TimeoutExpired:
+        print(f"  Timed out waiting for {media_type} generation (10 min limit)")
+    except FileNotFoundError:
+        print(f"  notebooklm CLI not found. Install: pip install notebooklm-py")
+
+    return False
+
+
+def generate_media(media_type: str, notebook_id: str = NOTEBOOK_ID,
+                   instructions: str = None) -> bool:
+    """Generate media artifact from NotebookLM.
+
+    Args:
+        media_type: One of 'audio', 'video', 'infographic', 'slide-deck', 'mind-map', 'quiz'
+        notebook_id: NotebookLM notebook ID
+        instructions: Custom instructions for audio generation
+    """
+    MEDIA_DIR.mkdir(exist_ok=True)
+
+    if media_type == 'audio' and not instructions:
+        instructions = (
+            "Create a weekly briefing overview of KSA Athletics performance. "
+            "Focus on top athletes, recent results, and Asian Games 2026 preparation. "
+            "Keep it professional and under 10 minutes."
+        )
+
+    print(f"Generating {media_type}...")
+
+    # Try Python API first
+    try:
+        from notebooklm import NotebookLM
+        nlm = NotebookLM()
+        nb = nlm.get(notebook_id)
+
+        if media_type == 'audio':
+            status = nlm.artifacts.generate_audio(nb.id, instructions=instructions)
+        elif media_type == 'quiz':
+            status = nlm.artifacts.generate_quiz(nb.id)
+        elif media_type == 'mind-map':
+            status = nlm.artifacts.generate_mind_map(nb.id)
+        else:
+            return _generate_media_cli(media_type, notebook_id, instructions)
+
+        print(f"  Waiting for {media_type} generation...")
+        nlm.artifacts.wait_for_completion(nb.id, status.task_id)
+        print(f"  {media_type.title()} generated!")
+        return True
+
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"  API error: {e}, trying CLI...")
+
+    return _generate_media_cli(media_type, notebook_id, instructions)
+
+
+def download_media(media_type: str, notebook_id: str = NOTEBOOK_ID) -> Optional[Path]:
+    """Download generated media to briefings/media/ directory."""
+    MEDIA_DIR.mkdir(exist_ok=True)
+
+    timestamp = datetime.now().strftime('%Y%m%d')
+    extensions = {'audio': 'mp3', 'quiz': 'json', 'mind-map': 'json'}
+    ext = extensions.get(media_type, 'json')
+    output_path = MEDIA_DIR / f"ksa_athletics_{media_type}_{timestamp}.{ext}"
+
+    print(f"Downloading {media_type} to {output_path.relative_to(BASE_DIR)}...")
+
+    # Try Python API
+    try:
+        from notebooklm import NotebookLM
+        nlm = NotebookLM()
+        nb = nlm.get(notebook_id)
+
+        if media_type == 'audio':
+            nlm.artifacts.download_audio(nb.id, str(output_path))
+        elif media_type == 'quiz':
+            nlm.artifacts.download_quiz(nb.id, str(output_path))
+        elif media_type == 'mind-map':
+            nlm.artifacts.download_mind_map(nb.id, str(output_path))
+
+        print(f"  Downloaded: {output_path.name}")
+        return output_path
+
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"  API error: {e}, trying CLI...")
+
+    # CLI fallback
+    try:
+        result = subprocess.run(
+            ["notebooklm", "download", media_type, str(output_path),
+             "--notebook", notebook_id],
+            capture_output=True, text=True, timeout=120
+        )
+        if result.returncode == 0:
+            print(f"  Downloaded: {output_path.name}")
+            return output_path
+        else:
+            print(f"  Error: {result.stderr.strip()}")
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        print(f"  Failed: {e}")
+
+    return None
+
+
+def run_full_pipeline(include_docs: bool = False, audio_instructions: str = None):
+    """Run the complete pipeline: generate -> upload -> generate audio -> download."""
+    print("=" * 60)
+    print("KSA Athletics Intelligence - Full Pipeline")
+    print("=" * 60)
+
+    # Step 1: Generate
+    print("\n[1/4] Generating briefings...")
+    generate_all_briefings()
+
+    # Step 2: Upload
+    print("\n[2/4] Uploading to NotebookLM...")
+    results = upload_all_to_notebooklm(include_docs=include_docs)
+    total = results['briefings'] + results['athletes'] + results['documents']
+    print(f"  Uploaded: {total} files ({results['failed']} failed)")
+
+    if results['failed'] > 0 and total == 0:
+        print("  Upload failed entirely. Check authentication: notebooklm login")
         return False
 
-    nlm = NotebookLM()
-    notebook_name = "KSA Athletics Intelligence"
+    # Step 3: Generate audio
+    print("\n[3/4] Generating audio overview...")
+    audio_ok = generate_media('audio', instructions=audio_instructions)
 
-    print(f"Uploading to NotebookLM notebook: {notebook_name}")
+    # Step 4: Download audio
+    if audio_ok:
+        print("\n[4/4] Downloading audio...")
+        download_media('audio')
+    else:
+        print("\n[4/4] Skipping download (audio generation failed)")
 
-    for file in BRIEFINGS_DIR.glob("*.md"):
-        print(f"  Uploading: {file.name}")
-        try:
-            nlm.source_add(str(file), notebook=notebook_name)
-        except Exception as e:
-            print(f"    Error: {e}")
-
-    print("Upload complete!")
+    print("\n" + "=" * 60)
+    print("Pipeline complete!")
+    print(f"  Briefings: {BRIEFINGS_DIR}")
+    print(f"  Media:     {MEDIA_DIR}")
+    print("=" * 60)
     return True
 
 
 if __name__ == "__main__":
-    import sys
+    import argparse
 
-    # Generate briefings
+    parser = argparse.ArgumentParser(
+        description="Generate KSA Athletics briefings for NotebookLM",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python generate_briefings.py                        Generate briefings only
+  python generate_briefings.py --upload               Generate + upload all to NotebookLM
+  python generate_briefings.py --upload --docs        Include PDF rulebooks in upload
+  python generate_briefings.py --generate-audio       Generate + upload + create audio
+  python generate_briefings.py --generate-infographic Generate + upload + create infographic
+  python generate_briefings.py --full-pipeline        Full: generate + upload + audio + download
+  python generate_briefings.py --download audio       Download previously generated audio
+        """
+    )
+
+    parser.add_argument('--upload', action='store_true',
+                        help='Upload all briefings + athlete profiles to NotebookLM')
+    parser.add_argument('--docs', action='store_true',
+                        help='Also upload PDF documents from documents/ directory')
+    parser.add_argument('--generate-audio', action='store_true',
+                        help='Generate audio overview after upload')
+    parser.add_argument('--generate-video', action='store_true',
+                        help='Generate whiteboard video after upload')
+    parser.add_argument('--generate-infographic', action='store_true',
+                        help='Generate infographic after upload')
+    parser.add_argument('--generate-quiz', action='store_true',
+                        help='Generate quiz after upload')
+    parser.add_argument('--generate-mind-map', action='store_true',
+                        help='Generate mind map after upload')
+    parser.add_argument('--generate-slide-deck', action='store_true',
+                        help='Generate slide deck after upload')
+    parser.add_argument('--full-pipeline', action='store_true',
+                        help='Full pipeline: generate -> upload -> audio -> download')
+    parser.add_argument('--download', type=str, choices=['audio', 'quiz', 'mind-map'],
+                        help='Download previously generated media')
+    parser.add_argument('--audio-instructions', type=str, default=None,
+                        help='Custom instructions for audio generation')
+    parser.add_argument('--notebook-id', type=str, default=NOTEBOOK_ID,
+                        help=f'NotebookLM notebook ID (default: {NOTEBOOK_ID})')
+
+    args = parser.parse_args()
+
+    # Full pipeline mode
+    if args.full_pipeline:
+        run_full_pipeline(include_docs=args.docs,
+                          audio_instructions=args.audio_instructions)
+        sys.exit(0)
+
+    # Download only (no generation needed)
+    if args.download:
+        download_media(args.download, notebook_id=args.notebook_id)
+        sys.exit(0)
+
+    # Generate briefings (always, unless just downloading)
     generate_all_briefings()
 
-    # Upload if --upload flag provided
-    if "--upload" in sys.argv:
-        upload_to_notebooklm()
+    # Check if any media generation was requested (implies upload)
+    media_flags = {
+        'audio': args.generate_audio,
+        'video': args.generate_video,
+        'infographic': args.generate_infographic,
+        'quiz': args.generate_quiz,
+        'mind-map': args.generate_mind_map,
+        'slide-deck': args.generate_slide_deck,
+    }
+    any_media = any(media_flags.values())
+
+    # Upload if requested or if media generation requested
+    if args.upload or any_media:
+        results = upload_all_to_notebooklm(
+            include_docs=args.docs,
+            notebook_id=args.notebook_id
+        )
+        total = results['briefings'] + results['athletes'] + results['documents']
+        print(f"\nUpload summary: {total} succeeded, {results['failed']} failed")
+
+    # Generate media if requested
+    for media_type, requested in media_flags.items():
+        if requested:
+            instructions = args.audio_instructions if media_type == 'audio' else None
+            ok = generate_media(media_type, notebook_id=args.notebook_id,
+                                instructions=instructions)
+            if ok and media_type in ('audio', 'quiz', 'mind-map'):
+                download_media(media_type, notebook_id=args.notebook_id)

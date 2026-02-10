@@ -15,8 +15,9 @@ import subprocess
 import json
 from typing import Optional
 
-# Your NotebookLM notebook ID
+# Your NotebookLM notebook ID and name
 NOTEBOOK_ID = "d7034cab-0282-4b95-b960-d8f5e40d90e1"
+NOTEBOOK_NAME = "KSA Athletics Intelligence"
 
 
 def check_notebooklm_available() -> bool:

@@ -75,18 +75,19 @@ GRAY_BLUE = '#78909C'
 ###################################
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
-# Free models on OpenRouter (updated January 2025)
+# Free models on OpenRouter (updated February 2026)
 FREE_MODELS = {
-    'deepseek/deepseek-r1-distill-llama-70b:free': 'DeepSeek R1 70B (Best Free)',
-    'deepseek/deepseek-chat-v3-0324:free': 'DeepSeek Chat v3 (Fast)',
-    'meta-llama/llama-3.1-8b-instruct:free': 'Llama 3.1 8B (Balanced)',
-    'meta-llama/llama-3.2-3b-instruct:free': 'Llama 3.2 3B (Fastest)',
-    'google/gemma-2-9b-it:free': 'Gemma 2 9B (Google)',
-    'mistralai/mistral-7b-instruct:free': 'Mistral 7B (Efficient)',
-    'qwen/qwen-2-7b-instruct:free': 'Qwen 2 7B (Multilingual)',
+    'nousresearch/hermes-3-llama-3.1-405b:free': 'Hermes 3 405B (Best Quality)',
+    'meta-llama/llama-3.3-70b-instruct:free': 'Llama 3.3 70B (Recommended)',
+    'google/gemma-3-27b-it:free': 'Gemma 3 27B (Google 131K ctx)',
+    'mistralai/mistral-small-3.1-24b-instruct:free': 'Mistral Small 3.1 24B (128K ctx)',
+    'google/gemma-3-12b-it:free': 'Gemma 3 12B (Balanced)',
+    'google/gemma-3-4b-it:free': 'Gemma 3 4B (Fastest)',
+    'meta-llama/llama-3.2-3b-instruct:free': 'Llama 3.2 3B (Lightweight)',
+    'deepseek/deepseek-r1:free': 'DeepSeek R1 (Reasoning)',
 }
 
-DEFAULT_MODEL = 'deepseek/deepseek-r1-distill-llama-70b:free'
+DEFAULT_MODEL = 'meta-llama/llama-3.3-70b-instruct:free'
 
 
 def get_openrouter_key() -> Optional[str]:

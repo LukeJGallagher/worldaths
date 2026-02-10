@@ -760,7 +760,7 @@ class MajorGamesAnalyzer(BaseAthleticsAgent):
             except Exception as e:
                 print(f"Warning: Could not load Azure profiles data: {e}")
                 import traceback
-                traceback.print_exc()
+                print(traceback.format_exc())
 
         # Fall back to local SQLite profiles database
         if os.path.exists(self.profiles_db):

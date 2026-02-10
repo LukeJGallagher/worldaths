@@ -15,6 +15,35 @@ import pandas as pd
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
 
+# Event name mapping: UI display name -> database format
+EVENT_NAME_MAP = {
+    '100m': '100-metres',
+    '200m': '200-metres',
+    '400m': '400-metres',
+    '800m': '800-metres',
+    '1500m': '1500-metres',
+    '5000m': '5000-metres',
+    '10000m': '10000-metres',
+    '110m Hurdles': '110-metres-hurdles',
+    '100m Hurdles': '100-metres-hurdles',
+    '400m Hurdles': '400-metres-hurdles',
+    '3000m Steeplechase': '3000-metres-steeplechase',
+    'High Jump': 'high-jump',
+    'Pole Vault': 'pole-vault',
+    'Long Jump': 'long-jump',
+    'Triple Jump': 'triple-jump',
+    'Shot Put': 'shot-put',
+    'Discus Throw': 'discus-throw',
+    'Hammer Throw': 'hammer-throw',
+    'Javelin Throw': 'javelin-throw',
+    'Decathlon': 'decathlon',
+    'Heptathlon': 'heptathlon',
+    'Marathon': 'marathon',
+}
+
+# Current data season (updated as new data is scraped)
+CURRENT_DATA_SEASON = 2025
+
 # Import dependencies
 try:
     from data_connector import get_competitors, get_rankings_data, get_benchmarks_data, query
@@ -55,14 +84,93 @@ ROUND_STANDARDS = {
 }
 
 
+
+# Asian country codes for championship-based filtering
+ASIAN_COUNTRY_CODES = {
+    'AFG', 'BAN', 'BHR', 'BHU', 'BRU', 'CAM', 'CHN', 'TPE', 'HKG', 'IND',
+    'INA', 'IDN', 'IRI', 'IRQ', 'JPN', 'JOR', 'KAZ', 'KOR', 'PRK', 'KUW',
+    'KGZ', 'LAO', 'LBN', 'MAC', 'MAS', 'MYA', 'MDV', 'MGL', 'NEP', 'OMA',
+    'PAK', 'PLE', 'PHI', 'QAT', 'KSA', 'SIN', 'SRI', 'SYR', 'TJK', 'THA',
+    'TLS', 'TKM', 'UAE', 'UZB', 'VIE', 'YEM',
+}
+
+
+def _batch_get_recent_results(athlete_names: List[str], event: str, limit_per_athlete: int = 10) -> Dict[str, List[Dict]]:
+    """
+    Batch fetch recent results for multiple athletes in a single query.
+    Eliminates N+1 query problem in get_competitor_form_cards.
+
+    Returns dict mapping athlete_name -> list of result dicts.
+    """
+    if not DATA_AVAILABLE or not athlete_names:
+        return {}
+
+    try:
+        # Build athlete name conditions
+        safe_names = [n.replace("'", "''") for n in athlete_names]
+        name_conditions = " OR ".join([f"competitor ILIKE '%{n}%'" for n in safe_names])
+
+        # Convert event format
+        db_event = EVENT_NAME_MAP.get(event, event.lower().replace(' ', '-'))
+
+        # Event filter
+        if db_event in EVENT_NAME_MAP.values():
+            event_filter = f"(event = '{db_event}' OR event ILIKE '%{db_event}%')"
+        else:
+            event_filter = f"event ILIKE '%{db_event}%'"
+
+        sql = f"""
+            WITH ranked AS (
+                SELECT
+                    competitor,
+                    result,
+                    result_numeric,
+                    date,
+                    venue,
+                    event,
+                    rank,
+                    ROW_NUMBER() OVER (PARTITION BY competitor ORDER BY date DESC) as rn
+                FROM master
+                WHERE ({name_conditions})
+                    AND {event_filter}
+            )
+            SELECT competitor, result, result_numeric, date, venue, event, rank
+            FROM ranked
+            WHERE rn <= {limit_per_athlete}
+            ORDER BY competitor, date DESC
+        """
+
+        df = query(sql)
+        if df is None or df.empty:
+            return {}
+
+        # Group by athlete name (using fuzzy matching since ILIKE was used)
+        results_by_athlete = {}
+        for name in athlete_names:
+            name_lower = name.lower()
+            mask = df['competitor'].str.lower().str.contains(name_lower, na=False)
+            athlete_df = df[mask]
+            if not athlete_df.empty:
+                results_by_athlete[name] = athlete_df.drop(columns=['competitor'], errors='ignore').to_dict('records')
+
+        return results_by_athlete
+    except Exception:
+        return {}
+
+
 def get_competitor_form_cards(
     event: str,
     gender: str = 'Men',
     limit: int = 10,
-    season: int = None
+    season: int = None,
+    championship: str = None
 ) -> List[Dict]:
     """
     Get top competitors with form analysis and best races.
+
+    Args:
+        championship: Optional - 'Asian Games', 'World Championships', 'Olympics'.
+                      If 'Asian Games', filters to Asian country codes only.
 
     Returns list of dicts with:
     - athlete_name, country_code
@@ -75,22 +183,30 @@ def get_competitor_form_cards(
         return []
 
     if season is None:
-        season = datetime.now().year
+        # Use latest data season, not current year (which may not have data yet)
+        season = CURRENT_DATA_SEASON
 
-    # Get competitors from data
-    competitors_df = get_competitors(event, gender, limit * 2, season)
+    # Get competitors from data (no season filter for now to get best data coverage)
+    competitors_df = get_competitors(event, gender, limit * 2, season=None)
 
     if competitors_df is None or competitors_df.empty:
         return []
 
-    results = []
-
+    # Collect athlete names for batch query
+    athlete_info = []
     for _, row in competitors_df.head(limit).iterrows():
         athlete_name = row.get('athlete_name', row.get('competitor', 'Unknown'))
         country_code = row.get('country_code', row.get('nat', ''))
+        athlete_info.append((athlete_name, country_code))
 
-        # Get athlete's recent results
-        athlete_results = get_athlete_recent_results(athlete_name, event, limit=10)
+    # Batch fetch all athletes' recent results in ONE query (instead of N queries)
+    all_names = [name for name, _ in athlete_info]
+    batch_results = _batch_get_recent_results(all_names, event, limit_per_athlete=10)
+
+    results = []
+
+    for athlete_name, country_code in athlete_info:
+        athlete_results = batch_results.get(athlete_name, [])
 
         if not athlete_results:
             continue
@@ -125,6 +241,7 @@ def get_competitor_form_cards(
         last_comp = {
             'result': athlete_results[0].get('result', ''),
             'venue': athlete_results[0].get('venue', ''),
+            'date': athlete_results[0].get('date', ''),
             'days_ago': days_since or 0
         } if athlete_results else None
 
@@ -141,6 +258,10 @@ def get_competitor_form_cards(
             'best_2_races': best_2,
             'last_comp': last_comp
         })
+
+    # Filter by championship region if specified
+    if championship and championship == 'Asian Games' and results:
+        results = [r for r in results if r.get('country_code', '').upper() in ASIAN_COUNTRY_CODES]
 
     # Sort by form score descending
     results.sort(key=lambda x: x['form_score'], reverse=True)
@@ -168,9 +289,13 @@ def get_athlete_recent_results(athlete_name: str, event: str = None, limit: int 
             WHERE competitor ILIKE '%{safe_name}%'
         """
         if event:
-            # Convert event format for database matching
-            event_clean = event.lower().replace(' ', '%')
-            sql += f" AND event ILIKE '%{event_clean}%'"
+            # Convert event format using mapping
+            db_event = EVENT_NAME_MAP.get(event, event.lower().replace(' ', '-'))
+            # Use exact match for main events, ILIKE for variations
+            if db_event in EVENT_NAME_MAP.values():
+                sql += f" AND (event = '{db_event}' OR event ILIKE '%{db_event}%')"
+            else:
+                sql += f" AND event ILIKE '%{db_event}%'"
 
         sql += f" ORDER BY date DESC LIMIT {limit}"
 

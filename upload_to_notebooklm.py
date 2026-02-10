@@ -25,8 +25,12 @@ BASE_DIR = Path(__file__).parent
 BRIEFINGS_DIR = BASE_DIR / "briefings"
 DOCUMENTS_DIR = BASE_DIR / "documents"
 
-# NotebookLM notebook name
-NOTEBOOK_NAME = "KSA Athletics Intelligence"
+# NotebookLM configuration - NOTEBOOK_ID is the canonical identifier
+try:
+    from notebooklm_client import NOTEBOOK_ID, NOTEBOOK_NAME
+except ImportError:
+    NOTEBOOK_ID = "d7034cab-0282-4b95-b960-d8f5e40d90e1"
+    NOTEBOOK_NAME = "KSA Athletics Intelligence"
 
 
 def check_notebooklm_installed() -> bool:
@@ -115,7 +119,7 @@ def upload_file(filepath: Path, notebook: str) -> bool:
     return False
 
 
-def upload_briefings(notebook: str = NOTEBOOK_NAME) -> int:
+def upload_briefings(notebook: str = NOTEBOOK_ID) -> int:
     """Upload all briefings from briefings/ directory."""
     if not BRIEFINGS_DIR.exists():
         print(f"Briefings directory not found: {BRIEFINGS_DIR}")
@@ -133,7 +137,25 @@ def upload_briefings(notebook: str = NOTEBOOK_NAME) -> int:
     return success_count
 
 
-def upload_documents(notebook: str = NOTEBOOK_NAME) -> int:
+def upload_athlete_profiles(notebook: str = NOTEBOOK_ID) -> int:
+    """Upload individual athlete profiles from briefings/athletes/ directory."""
+    athletes_dir = BRIEFINGS_DIR / "athletes"
+    if not athletes_dir.exists():
+        print(f"Athletes directory not found: {athletes_dir}")
+        return 0
+
+    print(f"\nUploading athlete profiles to '{notebook}'...")
+
+    success_count = 0
+    for file in sorted(athletes_dir.glob("*.md")):
+        if upload_file(file, notebook):
+            success_count += 1
+
+    print(f"\nUploaded {success_count} athlete profiles.")
+    return success_count
+
+
+def upload_documents(notebook: str = NOTEBOOK_ID) -> int:
     """Upload PDF documents from documents/ directory."""
     if not DOCUMENTS_DIR.exists():
         print(f"Documents directory not found: {DOCUMENTS_DIR}")
@@ -194,11 +216,12 @@ def main():
 
     # Upload briefings (default action)
     if upload_all or (not upload_docs):
-        upload_briefings(NOTEBOOK_NAME)
+        upload_briefings(NOTEBOOK_ID)
+        upload_athlete_profiles(NOTEBOOK_ID)
 
     # Upload documents
     if upload_all or upload_docs:
-        upload_documents(NOTEBOOK_NAME)
+        upload_documents(NOTEBOOK_ID)
 
     print("\nDone!")
     print(f"\nView your notebook at: https://notebooklm.google.com")

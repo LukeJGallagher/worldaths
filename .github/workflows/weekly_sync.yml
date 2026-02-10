@@ -97,6 +97,12 @@ jobs:
           python generate_briefings.py
           echo "Briefings generated in briefings/ folder"
           ls -la briefings/
+          ls -la briefings/athletes/ 2>/dev/null || echo "No athlete profiles directory"
+          echo ""
+          echo "NOTE: NotebookLM upload requires interactive Google OAuth (cannot run in CI)."
+          echo "After this workflow completes, run locally:"
+          echo "  python generate_briefings.py --upload              # Upload briefings only"
+          echo "  python generate_briefings.py --full-pipeline       # Upload + generate audio"
 
       - name: Upload briefings to Azure Static Website
         env:

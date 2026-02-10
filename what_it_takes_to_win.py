@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import sqlite3
 import os
+import re
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
@@ -21,7 +22,8 @@ GRAY_BLUE = '#78909C'
 # Try to import Azure/Parquet data connector
 try:
     from data_connector import (
-        get_rankings_data, get_data_mode, _download_parquet_from_azure
+        get_rankings_data, get_data_mode, _download_parquet_from_azure,
+        get_major_championships_data
     )
     DATA_CONNECTOR_AVAILABLE = True
 except ImportError:
@@ -46,6 +48,39 @@ EVENT_CATEGORIES = {
     'Combined': ['Decathlon', 'Heptathlon', 'decathlon', 'heptathlon']
 }
 
+# Bidirectional event name mapping: database format <-> display format
+EVENT_DB_TO_DISPLAY = {
+    '100-metres': '100m', '200-metres': '200m', '400-metres': '400m',
+    '800-metres': '800m', '1500-metres': '1500m', '3000-metres': '3000m',
+    '5000-metres': '5000m', '10000-metres': '10000m',
+    '110-metres-hurdles': '110m Hurdles', '100-metres-hurdles': '100m Hurdles',
+    '400-metres-hurdles': '400m Hurdles', '3000-metres-steeplechase': '3000m Steeplechase',
+    'high-jump': 'High Jump', 'pole-vault': 'Pole Vault',
+    'long-jump': 'Long Jump', 'triple-jump': 'Triple Jump',
+    'shot-put': 'Shot Put', 'discus-throw': 'Discus Throw',
+    'hammer-throw': 'Hammer Throw', 'javelin-throw': 'Javelin Throw',
+    'decathlon': 'Decathlon', 'heptathlon': 'Heptathlon',
+    'marathon': 'Marathon', 'half-marathon': 'Half Marathon',
+    '4-x-100-metres-relay': '4x100m Relay', '4-x-400-metres-relay': '4x400m Relay',
+    '20-kilometres-race-walk': '20km Race Walk',
+    '35-kilometres-race-walk': '35km Race Walk',
+    '50-kilometres-race-walk': '50km Race Walk',
+}
+EVENT_DISPLAY_TO_DB = {v: k for k, v in EVENT_DB_TO_DISPLAY.items()}
+
+
+def format_event_name(db_name: str) -> str:
+    """Convert database event name to display name. '100-metres' -> '100m'."""
+    return EVENT_DB_TO_DISPLAY.get(db_name, db_name.replace('-', ' ').title())
+
+
+def normalize_event_for_match(event_name: str) -> str:
+    """Normalize event name for exact comparison.
+    Both '100-metres' and '100m' -> '100metres'.
+    """
+    return re.sub(r'[^0-9a-z]', '', event_name.lower())
+
+
 # Standard marks for different medal positions at different competition levels
 # These are updated dynamically from scraped data
 class WhatItTakesToWin:
@@ -55,11 +90,97 @@ class WhatItTakesToWin:
     MAJOR_COMP_KEYWORDS = {
         'Olympic': ['Olympic', 'Olympics', 'XXXIII Olympic', 'XXXII Olympic', 'Paris 2024', 'Tokyo 2020', 'Rio 2016', 'London 2012'],
         'World Champs': ['World Athletics Championships', 'World Championships', 'Worlds', 'WCH', 'Budapest 2023', 'Oregon 2022', 'Doha 2019', 'London 2017', 'Beijing 2015'],
-        'Asian Games': ['Asian Games', 'Asiad', 'Hangzhou 2022', 'Jakarta 2018', 'Incheon 2014'],
+        'Asian Games': ['Asian Games', 'Asiad', 'Hangzhou 2023', 'Jakarta 2018', 'Incheon 2014', 'Guangzhou 2010'],
         'Asian Champs': ['Asian Athletics Championships', 'Asian Indoor', 'Asian Championships', 'Asian Athletics'],
         'Arab': ['Arab Athletics', 'Arab Championships', 'Pan Arab', 'Arab Games'],
         'Diamond League': ['Diamond League', 'DL ', 'Zurich', 'Brussels', 'Monaco', 'Rome', 'Eugene', 'Stockholm', 'Paris DL'],
         'All': None  # No filter - use all data
+    }
+
+    # Date-aware city-championship mapping (city, year_start, year_end, championship)
+    # This resolves conflicts where same city hosts different championships
+    CITY_YEAR_MAPPING = [
+        # Olympics (specific years - July/August usually)
+        ('Paris', 2024, 2024, 'Olympic'),
+        ('Tokyo', 2021, 2021, 'Olympic'),  # Held in 2021 due to COVID
+        ('Rio', 2016, 2016, 'Olympic'),
+        ('London', 2012, 2012, 'Olympic'),
+        ('Beijing', 2008, 2008, 'Olympic'),
+        ('Athens', 2004, 2004, 'Olympic'),
+        ('Sydney', 2000, 2000, 'Olympic'),
+        ('Atlanta', 1996, 1996, 'Olympic'),
+        ('Barcelona', 1992, 1992, 'Olympic'),
+        ('Seoul', 1988, 1988, 'Olympic'),
+        # World Championships (specific years)
+        ('Budapest', 2023, 2023, 'World Champs'),
+        ('Eugene', 2022, 2022, 'World Champs'),
+        ('Doha', 2019, 2019, 'World Champs'),
+        ('London', 2017, 2017, 'World Champs'),
+        ('Beijing', 2015, 2015, 'World Champs'),
+        ('Moscow', 2013, 2013, 'World Champs'),
+        ('Daegu', 2011, 2011, 'World Champs'),
+        ('Berlin', 2009, 2009, 'World Champs'),
+        ('Osaka', 2007, 2007, 'World Champs'),
+        ('Helsinki', 2005, 2005, 'World Champs'),
+        ('Paris', 2003, 2003, 'World Champs'),
+        # Asian Games (specific years - typically September/October)
+        ('Hangzhou', 2023, 2023, 'Asian Games'),
+        ('Jakarta', 2018, 2018, 'Asian Games'),
+        ('Incheon', 2014, 2014, 'Asian Games'),
+        ('Guangzhou', 2010, 2010, 'Asian Games'),
+        ('Doha', 2006, 2006, 'Asian Games'),
+        ('Busan', 2002, 2002, 'Asian Games'),
+    ]
+
+    # City to Championship mapping (for venues stored as city names)
+    VENUE_CITY_MAPPING = {
+        # World Championships venues
+        'Budapest': 'World Champs',
+        'Eugene': 'World Champs',  # Also Diamond League
+        'Doha': 'World Champs',    # Also Diamond League
+        'London': 'World Champs',  # Also Olympic 2012
+        'Beijing': 'World Champs', # Also Olympic 2008
+        'Moscow': 'World Champs',
+        'Moskva': 'World Champs',
+        'Daegu': 'World Champs',
+        'Berlin': 'World Champs',
+        'Osaka': 'World Champs',
+        'Helsinki': 'World Champs',
+        'Paris': 'World Champs',   # Also Olympic 2024
+        'Edmonton': 'World Champs',
+        'Seville': 'World Champs',
+        'Athens': 'World Champs',  # Also Olympic 2004
+        'Gothenburg': 'World Champs',
+        'Stuttgart': 'World Champs',
+        'Tokyo': 'World Champs',   # Also Olympic 2020/2021
+        # Olympics venues (by year for disambiguation)
+        'Rio': 'Olympic',
+        'Sydney': 'Olympic',
+        'Atlanta': 'Olympic',
+        'Barcelona': 'Olympic',
+        'Seoul': 'Olympic',
+        'Los Angeles': 'Olympic',
+        # Asian Games venues
+        'Hangzhou': 'Asian Games',
+        'Jakarta': 'Asian Games',
+        'Incheon': 'Asian Games',
+        'Guangzhou': 'Asian Games',
+        'Busan': 'Asian Games',
+        'Bangkok': 'Asian Games',
+        'Hiroshima': 'Asian Games',
+        # Diamond League venues
+        'Zurich': 'Diamond League',
+        'Brussels': 'Diamond League',
+        'Monaco': 'Diamond League',
+        'Rome': 'Diamond League',
+        'Stockholm': 'Diamond League',
+        'Birmingham': 'Diamond League',
+        'Rabat': 'Diamond League',
+        'Shanghai': 'Diamond League',
+        'Lausanne': 'Diamond League',
+        'Oslo': 'Diamond League',
+        'Chorzow': 'Diamond League',
+        'Silesia': 'Diamond League',
     }
 
     def __init__(self, data_dir: str = None):
@@ -68,18 +189,75 @@ class WhatItTakesToWin:
         self.data = None
         self.winning_marks = {}
 
+    def _filter_major_championships(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Pre-filter data to only include major championship records.
+        This significantly reduces memory usage from 2.3M to ~50-100K records.
+        """
+        if df is None or len(df) == 0:
+            return df
+
+        # Find venue column
+        venue_col = None
+        for col_name in ['Venue', 'venue', 'Competition', 'competition', 'comp', 'meet', 'Meet']:
+            if col_name in df.columns:
+                venue_col = col_name
+                break
+
+        if venue_col is None:
+            # No venue column - return all data
+            print("Warning: No venue column found for championship filtering")
+            return df
+
+        # Collect all major championship keywords
+        all_keywords = []
+        for keywords in self.MAJOR_COMP_KEYWORDS.values():
+            if keywords is not None:  # Skip 'All' which has None value
+                all_keywords.extend(keywords)
+        # Add city names from venue mapping
+        all_keywords.extend(list(self.VENUE_CITY_MAPPING.keys()))
+        # Remove duplicates
+        all_keywords = list(set(all_keywords))
+
+        # Memory-efficient filtering: process in chunks for large datasets
+        if len(df) > 1000000:
+            # Process in chunks to avoid memory issues
+            chunk_size = 200000
+            filtered_chunks = []
+
+            for start_idx in range(0, len(df), chunk_size):
+                end_idx = min(start_idx + chunk_size, len(df))
+                chunk = df.iloc[start_idx:end_idx]
+
+                # Create lowercase venue column for matching
+                venue_lower = chunk[venue_col].fillna('').str.lower()
+
+                # Build mask incrementally
+                chunk_mask = pd.Series([False] * len(chunk), index=chunk.index)
+                for keyword in all_keywords:
+                    chunk_mask = chunk_mask | venue_lower.str.contains(keyword.lower(), regex=False, na=False)
+
+                if chunk_mask.any():
+                    filtered_chunks.append(chunk[chunk_mask])
+
+            if filtered_chunks:
+                return pd.concat(filtered_chunks, ignore_index=True)
+            else:
+                print("Warning: No major championship records found in data")
+                return pd.DataFrame()
+        else:
+            # Standard approach for smaller datasets
+            pattern = '|'.join(all_keywords)
+            mask = df[venue_col].str.contains(pattern, case=False, na=False)
+            return df[mask]
+
     def load_scraped_data(self) -> pd.DataFrame:
         """Load data from Azure parquet or local CSV files."""
-        # Try Azure parquet first (master.parquet has 2.3M records)
+        # Try optimized major championships query first (uses DuckDB filtering)
         if DATA_CONNECTOR_AVAILABLE:
             try:
-                # Import the direct download function
-                from data_connector import _download_parquet_from_azure, get_data_mode
-
-                if get_data_mode() == "azure":
-                    df = _download_parquet_from_azure("master.parquet")
-                else:
-                    df = get_rankings_data()
+                # Use the new optimized function that filters in DuckDB
+                df = get_major_championships_data()
 
                 if df is not None and not df.empty:
                     # Normalize column names to match expected format
@@ -92,19 +270,28 @@ class WhatItTakesToWin:
                         'venue': 'Venue',
                         'gender': 'Gender',
                         'nat': 'Country',
-                        'rank': 'Rank'
+                        'rank': 'Rank',
+                        'year': 'year'  # Preserve year column if present
                     }
                     for old_col, new_col in column_map.items():
                         if old_col in df.columns and new_col not in df.columns:
                             df = df.rename(columns={old_col: new_col})
 
+                    # Extract year from Date if year column not present
+                    if 'year' not in df.columns and 'Date' in df.columns:
+                        try:
+                            df['year'] = pd.to_datetime(df['Date'], errors='coerce').dt.year
+                        except Exception:
+                            pass
+
+                    # Data is already filtered for major championships by get_major_championships_data()
                     self.data = df
-                    print(f"Loaded {len(self.data):,} records from Azure parquet")
+                    print(f"Loaded {len(self.data):,} major championship records (DuckDB filtered)")
                     return self.data
             except Exception as e:
                 print(f"Warning: Could not load Azure data: {e}")
                 import traceback
-                traceback.print_exc()
+                print(traceback.format_exc())
 
         # Fall back to local CSV files
         db_cleaned_path = os.path.join(self.data_dir, 'db_cleaned.csv')
@@ -124,18 +311,26 @@ class WhatItTakesToWin:
         return self.data
 
     def filter_by_competition(self, comp_type: str = 'All') -> pd.DataFrame:
-        """Filter data by competition type."""
+        """Filter data by competition type using championship_type column or date-aware city matching."""
         if self.data is None or len(self.data) == 0:
             return pd.DataFrame()
 
         if comp_type == 'All' or comp_type not in self.MAJOR_COMP_KEYWORDS:
             return self.data
 
+        df = self.data.copy()
+
+        # First try: Use championship_type column if available (added by get_major_championships_data)
+        if 'championship_type' in df.columns:
+            filtered = df[df['championship_type'] == comp_type]
+            if len(filtered) > 0:
+                print(f"Filtered to {len(filtered):,} '{comp_type}' records using championship_type column")
+                return filtered
+
+        # Fall back to venue-based matching
         keywords = self.MAJOR_COMP_KEYWORDS.get(comp_type)
         if not keywords:
             return self.data
-
-        df = self.data.copy()
 
         # Try multiple possible column names for competition/venue
         venue_col = None
@@ -145,21 +340,67 @@ class WhatItTakesToWin:
                 break
 
         if venue_col is None:
-            # No venue column available - return empty with a message
             print(f"Warning: No venue/competition column found. Available columns: {df.columns.tolist()}")
-            # Return all data if filtering not possible
             return df
 
-        pattern = '|'.join(keywords)
-        filtered = df[df[venue_col].str.contains(pattern, case=False, na=False)]
+        # Get date column
+        date_col = None
+        for col_name in ['date', 'Date', 'DATE']:
+            if col_name in df.columns:
+                date_col = col_name
+                break
+
+        # Extract year if we have a date column
+        if date_col is not None:
+            try:
+                df['_filter_year'] = pd.to_datetime(df[date_col], errors='coerce').dt.year
+            except:
+                df['_filter_year'] = None
+
+        # Convert venue to lowercase for matching
+        venue_lower = df[venue_col].fillna('').str.lower()
+
+        # Build mask using multiple approaches
+        mask = pd.Series([False] * len(df), index=df.index)
+
+        # 1. Match explicit keywords in venue name (e.g., "Olympic Stadium", "World Championships")
+        for keyword in keywords:
+            mask = mask | venue_lower.str.contains(keyword.lower(), regex=False, na=False)
+
+        # 2. Use date-aware city mapping for disambiguation
+        if date_col is not None and '_filter_year' in df.columns:
+            for city, year_start, year_end, champ in self.CITY_YEAR_MAPPING:
+                if champ == comp_type:
+                    city_mask = venue_lower.str.contains(city.lower(), regex=False, na=False)
+                    year_mask = (df['_filter_year'] >= year_start) & (df['_filter_year'] <= year_end)
+                    mask = mask | (city_mask & year_mask)
+
+        # 3. For Diamond League, match venues without date constraint (they're recurring)
+        if comp_type == 'Diamond League':
+            dl_cities = [city for city, champ in self.VENUE_CITY_MAPPING.items() if champ == 'Diamond League']
+            for city in dl_cities:
+                mask = mask | venue_lower.str.contains(city.lower(), regex=False, na=False)
+
+        # Clean up temporary column
+        if '_filter_year' in df.columns:
+            df = df.drop(columns=['_filter_year'])
+
+        filtered = df[mask]
 
         if len(filtered) == 0:
-            print(f"Warning: No records matched '{comp_type}' filter. Sample venues: {df[venue_col].dropna().head(10).tolist()}")
+            print(f"Warning: No records matched '{comp_type}' filter. Sample venues: {self.data[venue_col].dropna().head(10).tolist()}")
 
         return filtered
 
     def get_competition_types(self) -> list:
-        """Get list of available competition type filters."""
+        """Get list of available competition type filters from actual data."""
+        # Return types that actually exist in the data's championship_type column
+        if self.data is not None and 'championship_type' in self.data.columns:
+            actual_types = self.data['championship_type'].dropna().unique().tolist()
+            # Put 'All' first, then sort the rest (excluding 'Other')
+            sorted_types = ['All'] + sorted([t for t in actual_types if t != 'Other'])
+            return sorted_types
+        # Fallback to keyword keys
         return list(self.MAJOR_COMP_KEYWORDS.keys())
 
     def parse_time_to_seconds(self, time_str: str) -> Optional[float]:
@@ -215,6 +456,65 @@ class WhatItTakesToWin:
         field_keywords = ['jump', 'vault', 'put', 'throw', 'discus', 'javelin', 'hammer', 'decathlon', 'heptathlon']
         return any(kw in event.lower() for kw in field_keywords)
 
+    @staticmethod
+    def parse_position(pos_str) -> Optional[int]:
+        """Extract numeric finishing position from pos column.
+
+        Examples: '1' -> 1, '2ce1' -> 2, '1sf3' -> 1, '7h1' -> 7, 'dns' -> None
+        """
+        if pd.isna(pos_str):
+            return None
+        pos_clean = str(pos_str).strip().lower()
+        if any(x in pos_clean for x in ['dns', 'dnf', 'dq', 'nm', 'nr']):
+            return None
+        match = re.match(r'^(\d+)', pos_clean)
+        return int(match.group(1)) if match else None
+
+    @staticmethod
+    def filter_outlier_marks(marks: pd.Series, is_field: bool = False) -> pd.Series:
+        """Remove obviously invalid marks using median-based outlier detection.
+
+        Some scraped records have garbage values (e.g., WPA scoring points 1775.06
+        instead of actual 100m time 10.49). This filters them out by removing
+        values that deviate more than 5x from the median.
+
+        Returns a boolean mask (True = keep, False = outlier).
+        """
+        valid = marks.dropna()
+        if len(valid) < 3:
+            return pd.Series(True, index=marks.index)  # Not enough data to detect outliers
+
+        median_val = valid.median()
+        if median_val <= 0:
+            return pd.Series(True, index=marks.index)
+
+        # Remove values more than 5x the median (catches 1775 when median is ~10)
+        # Also remove values less than 1/5 the median (catches impossibly low values)
+        mask = marks.isna() | ((marks >= median_val / 5) & (marks <= median_val * 5))
+        return mask
+
+    @staticmethod
+    def is_finals_result(pos_str) -> bool:
+        """Check if a result is from a final (not heat/semi/qualifier).
+
+        Finals positions are plain numbers (1-12) or have 'f' suffix.
+        Heats have 'h', semis have 'sf', qualifiers have 'q'.
+        Combined events 'ce' are treated as finals.
+        """
+        if pd.isna(pos_str):
+            return False
+        pos_clean = str(pos_str).strip().lower()
+        if any(x in pos_clean for x in ['dns', 'dnf', 'dq', 'nm', 'nr']):
+            return False
+        # Plain number = final result
+        if re.match(r'^\d+$', pos_clean):
+            return True
+        # 'f' suffix = final, 'ce' = combined event (also a final)
+        if re.match(r'^\d+(f|ce)', pos_clean):
+            return True
+        # Exclude heats (h), semis (sf), qualifiers (q)
+        return False
+
     def analyze_top_performances(self, event: str = None, gender: str = None,
                                   year: int = None, top_n: int = 8) -> pd.DataFrame:
         """Analyze top performances for given filters (simulating finals)."""
@@ -226,9 +526,11 @@ class WhatItTakesToWin:
 
         df = self.data.copy()
 
-        # Apply filters
+        # Apply filters - exact match after normalization
         if event:
-            df = df[df['Event'].str.contains(event, case=False, na=False)]
+            event_normalized = normalize_event_for_match(event)
+            event_lower = df['Event'].astype(str).str.lower().str.replace('-', '', regex=False).str.replace(' ', '', regex=False)
+            df = df[event_lower == event_normalized]
         if gender:
             df = df[df['Gender'].str.lower() == gender.lower()]
         if year:
@@ -273,9 +575,12 @@ class WhatItTakesToWin:
         mark_col = 'Mark' if 'Mark' in df.columns else ('result' if 'result' in df.columns else 'Result')
         date_col = 'Date' if 'Date' in df.columns else 'date'
 
-        # Apply filters
+        # Apply filters - use word-boundary matching to prevent '100' from matching '10000'
         if event and event_col in df.columns:
-            df = df[df[event_col].astype(str).str.contains(event, case=False, na=False)]
+            # Strip separators for flexible matching, add lookbehind to prevent partial number matches
+            event_normalized = re.sub(r'[^0-9a-z]', '', event.lower())
+            event_lower = df[event_col].astype(str).str.lower().str.replace('-', '', regex=False).str.replace(' ', '', regex=False)
+            df = df[event_lower == event_normalized]
         if gender and gender_col in df.columns:
             df = df[df[gender_col].astype(str).str.lower().str.contains(gender.lower(), na=False)]
         if year and date_col in df.columns:
@@ -293,34 +598,69 @@ class WhatItTakesToWin:
 
         df = df.dropna(subset=['ParsedMark'])
 
-        # METHOD 1: Use actual rank column if available (most accurate)
-        if rank_col in df.columns:
-            # Get actual 1st, 2nd, 3rd place finishers
-            gold_results = df[df[rank_col] == 1]['ParsedMark']
-            silver_results = df[df[rank_col] == 2]['ParsedMark']
-            bronze_results = df[df[rank_col] == 3]['ParsedMark']
-            final_results = df[df[rank_col] == 8]['ParsedMark']
-            top_8_results = df[df[rank_col] <= 8]['ParsedMark']
-            top_20_results = df[df[rank_col] <= 20]['ParsedMark']
+        # Filter out outlier marks (e.g., garbage values like 1775 for a 100m race)
+        outlier_mask = self.filter_outlier_marks(df['ParsedMark'], is_field)
+        df = df[outlier_mask]
 
-            # Get representative values (median for more stable results)
-            gold = gold_results.median() if len(gold_results) > 0 else None
-            silver = silver_results.median() if len(silver_results) > 0 else None
-            bronze = bronze_results.median() if len(bronze_results) > 0 else None
-            final_standard = final_results.median() if len(final_results) > 0 else None
-            top_8_avg = top_8_results.mean() if len(top_8_results) > 0 else None
-            top_20_avg = top_20_results.mean() if len(top_20_results) > 0 else None
+        if len(df) == 0:
+            return {'gold': None, 'silver': None, 'bronze': None, 'final_standard': None,
+                    'top_8_avg': None, 'top_20_avg': None, 'is_field_event': is_field, 'sample_size': 0}
 
-            return {
-                'gold': gold,
-                'silver': silver,
-                'bronze': bronze,
-                'final_standard': final_standard,
-                'top_8_avg': top_8_avg,
-                'top_20_avg': top_20_avg,
-                'is_field_event': is_field,
-                'sample_size': len(df)
-            }
+        # METHOD 1: Use pos column for finishing position (1st, 2nd, 3rd place)
+        # NOTE: 'rank' column = world ranking number (1-7000), NOT finishing position
+        # The 'pos' column has actual finishing positions: 1, 2, 3, 1sf3, 2h1, etc.
+        pos_col = None
+        for col_name in ['pos', 'Pos', 'Position', 'position']:
+            if col_name in df.columns:
+                pos_col = col_name
+                break
+
+        if pos_col is not None:
+            # Parse finishing positions from pos column
+            df['_finishing_pos'] = df[pos_col].apply(self.parse_position)
+            df['_is_final'] = df[pos_col].apply(self.is_finals_result)
+
+            # Filter to finals only (exclude heats, semis, qualifiers)
+            finals_df = df[df['_is_final']].copy()
+
+            # If no finals identified, fall back to all results with valid positions
+            if finals_df.empty:
+                finals_df = df.dropna(subset=['_finishing_pos']).copy()
+
+            if not finals_df.empty:
+                # Get actual 1st, 2nd, 3rd place finishers from finals
+                gold_results = finals_df[finals_df['_finishing_pos'] == 1]['ParsedMark']
+                silver_results = finals_df[finals_df['_finishing_pos'] == 2]['ParsedMark']
+                bronze_results = finals_df[finals_df['_finishing_pos'] == 3]['ParsedMark']
+                final_results = finals_df[finals_df['_finishing_pos'] == 8]['ParsedMark']
+                top_8_results = finals_df[finals_df['_finishing_pos'] <= 8]['ParsedMark']
+                top_20_results = finals_df[finals_df['_finishing_pos'] <= 20]['ParsedMark']
+
+                # Get representative values (median for more stable results)
+                gold = gold_results.median() if len(gold_results) > 0 else None
+                silver = silver_results.median() if len(silver_results) > 0 else None
+                bronze = bronze_results.median() if len(bronze_results) > 0 else None
+                final_standard = final_results.median() if len(final_results) > 0 else None
+                top_8_avg = top_8_results.mean() if len(top_8_results) > 0 else None
+                top_20_avg = top_20_results.mean() if len(top_20_results) > 0 else None
+
+                # Enforce logical ordering: gold should be better than silver, silver better than bronze
+                # For track (lower is better): gold <= silver <= bronze
+                # For field (higher is better): gold >= silver >= bronze
+                if gold is not None and silver is not None and bronze is not None:
+                    medals = sorted([gold, silver, bronze], reverse=is_field)
+                    gold, silver, bronze = medals[0], medals[1], medals[2]
+
+                return {
+                    'gold': gold,
+                    'silver': silver,
+                    'bronze': bronze,
+                    'final_standard': final_standard,
+                    'top_8_avg': top_8_avg,
+                    'top_20_avg': top_20_avg,
+                    'is_field_event': is_field,
+                    'sample_size': len(finals_df)
+                }
 
         # METHOD 2: Fallback - sort by performance and deduplicate by athlete
         athlete_col = 'Competitor' if 'Competitor' in df.columns else 'competitor'
@@ -554,10 +894,12 @@ class WhatItTakesToWin:
 
         df = self.data.copy()
 
-        # Filter by event
+        # Filter by event - use word-boundary matching to prevent partial number matches
         event_col = 'Event' if 'Event' in df.columns else 'event'
         if event_col in df.columns:
-            df = df[df[event_col].str.contains(event, case=False, na=False)]
+            event_normalized = re.sub(r'[^0-9a-z]', '', event.lower())
+            event_lower = df[event_col].astype(str).str.lower().str.replace('-', '', regex=False).str.replace(' ', '', regex=False)
+            df = df[event_lower == event_normalized]
 
         # Filter by gender
         gender_col = 'Gender' if 'Gender' in df.columns else 'gender'
@@ -681,10 +1023,12 @@ class WhatItTakesToWin:
             'Asian Games', 'Commonwealth Games', 'Diamond League'
         ]
 
-        # Filter by event
+        # Filter by event - use word-boundary matching to prevent partial number matches
         event_col = 'Event' if 'Event' in df.columns else 'event'
         if event_col in df.columns:
-            df = df[df[event_col].str.contains(event, case=False, na=False)]
+            event_normalized = re.sub(r'[^0-9a-z]', '', event.lower())
+            event_lower = df[event_col].astype(str).str.lower().str.replace('-', '', regex=False).str.replace(' ', '', regex=False)
+            df = df[event_lower == event_normalized]
 
         # Filter by gender
         gender_col = 'Gender' if 'Gender' in df.columns else 'gender'
