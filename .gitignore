@@ -1,33 +1,23 @@
-# Environment variables - NEVER COMMIT
+# Secrets - NEVER commit
 .env
 .env.local
-*.env
-
-# Streamlit secrets
+.env.production
+secrets.toml
 .streamlit/secrets.toml
-
-# Data files - stored in Azure, not git
-*.csv
-*.parquet
-Data/
-SQL/
-briefings/
-documents/
-
-# Large backup/archive folders
-Archive/
-Backup/
-Profiles/
 
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
-.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
 venv/
-ENV/
 .venv/
+env/
 
 # IDE
 .vscode/
@@ -40,41 +30,13 @@ ENV/
 Thumbs.db
 desktop.ini
 
-# Logs
-*.log
-nul
+# Data (large files - store in Azure, not git)
+Data/parquet/*.parquet
+data/scraped/*.parquet
+data/scraped/photos/
+*.db
 
-# Temporary files
+# Temp
+temp_gh/
 *.tmp
-*.temp
-
-# Excel temp files
-~$*.xlsx
-~$*.xls
-
-# Large development files
-*.txt
-!Read me.txt
-!requirements.txt
-
-# GraphQL captured data
-athlete_*_graphql/
-*.json
-!refreshed_headers.json
-
-# Old development versions
-Development/
-worldathletics-main_2/
-world_athletics/
-
-# Image files (large)
-*.PNG
-*.png
-*.jpg
-*.jpeg
-*.jfif
-
-# Office files
-*.xlsx
-*.docx
-*.odt
+*.bak

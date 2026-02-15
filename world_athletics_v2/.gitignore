@@ -1,0 +1,40 @@
+# Secrets & Environment
+.env
+.env.*
+secrets.toml
+.streamlit/secrets.toml
+
+# Large/binary scraped files (photos, competition results)
+data/scraped/photos/
+data/scraped/comp_results_*
+data/scraped/ksa_deep_profiles.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Test files with hardcoded keys
+test_followup.py
+test_workarounds.py
+test_api.py
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+nul
+
+# Temp
+*.tmp
+*.log
+cache/

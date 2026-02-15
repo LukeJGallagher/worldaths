@@ -1,0 +1,148 @@
+name: Update v2 GraphQL Data
+
+on:
+  schedule:
+    # Daily at 4 AM UTC (after legacy scrapers)
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    inputs:
+      scrape_mode:
+        description: 'Scrape mode: daily (rankings+profiles), weekly (full refresh), initial (deep scrape)'
+        required: false
+        default: 'daily'
+        type: choice
+        options:
+          - daily
+          - weekly
+          - initial
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  scrape-v2:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install v2 dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r world_athletics_v2/requirements.txt
+
+      - name: Validate API key
+        env:
+          WA_API_KEY: ${{ secrets.WA_API_KEY }}
+        run: |
+          cd world_athletics_v2
+          python -c "
+          import os
+          key = os.environ.get('WA_API_KEY', '')
+          if not key:
+              print('ERROR: WA_API_KEY secret not set!')
+              print('Go to: Settings > Secrets > Actions > New repository secret')
+              print('Name: WA_API_KEY')
+              exit(1)
+          print(f'API key loaded (length: {len(key)})')
+          "
+
+      - name: Run v2 scraper pipeline
+        env:
+          WA_API_KEY: ${{ secrets.WA_API_KEY }}
+        run: |
+          cd world_athletics_v2
+          MODE=${{ github.event.inputs.scrape_mode || 'daily' }}
+          echo "Running v2 scraper in ${MODE} mode..."
+          python -m scrapers.pipeline --${MODE}
+        timeout-minutes: 45
+
+      - name: Validate scraped data
+        run: |
+          cd world_athletics_v2
+          python -c "
+          import pandas as pd
+          from pathlib import Path
+
+          data_dir = Path('data/scraped')
+          files = list(data_dir.glob('*.parquet'))
+          print(f'Parquet files: {len(files)}')
+
+          for f in sorted(files):
+              try:
+                  df = pd.read_parquet(f)
+                  print(f'  {f.name}: {len(df)} rows, {len(df.columns)} cols')
+              except Exception as e:
+                  print(f'  {f.name}: ERROR - {e}')
+
+          # Validate minimum data
+          athletes = data_dir / 'ksa_athletes.parquet'
+          if athletes.exists():
+              df = pd.read_parquet(athletes)
+              assert len(df) >= 10, f'Too few athletes: {len(df)}'
+              print(f'Validation PASSED: {len(df)} athletes')
+          else:
+              print('WARNING: ksa_athletes.parquet not found')
+          "
+
+      - name: Commit updated data
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+
+          # Add only parquet data files (not .env or secrets!)
+          git add world_athletics_v2/data/scraped/*.parquet || true
+          git add world_athletics_v2/data/scraped/*.json || true
+
+          if git diff --staged --quiet; then
+            echo "No data changes to commit"
+          else
+            MODE=${{ github.event.inputs.scrape_mode || 'daily' }}
+            git commit -m "Auto-update: v2 ${MODE} data refresh $(date +'%Y-%m-%d')"
+            git push
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v2-scraped-data-${{ github.run_number }}
+          path: world_athletics_v2/data/scraped/*.parquet
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Summary
+        run: |
+          MODE=${{ github.event.inputs.scrape_mode || 'daily' }}
+          echo "## v2 GraphQL Data Update" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Mode:** ${MODE}" >> $GITHUB_STEP_SUMMARY
+          echo "**Date:** $(date +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          cd world_athletics_v2
+          python -c "
+          import pandas as pd
+          from pathlib import Path
+
+          data_dir = Path('data/scraped')
+          print('| File | Rows | Cols |')
+          print('|------|------|------|')
+          for f in sorted(data_dir.glob('*.parquet')):
+              try:
+                  df = pd.read_parquet(f)
+                  print(f'| {f.name} | {len(df)} | {len(df.columns)} |')
+              except:
+                  print(f'| {f.name} | ERROR | - |')
+          " >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,78 @@
+name: Daily Data Sync (v2)
+
+on:
+  schedule:
+    - cron: '0 3 * * *'  # 3 AM UTC daily
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Sync mode'
+        required: false
+        default: 'daily'
+        type: choice
+        options:
+          - daily
+          - initial
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  sync-data:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install httpx pandas pyarrow tqdm azure-storage-blob
+
+      - name: Run pipeline
+        run: |
+          cd world_athletics_v2
+          python -m scrapers.pipeline --${{ github.event.inputs.mode || 'daily' }} --upload
+        timeout-minutes: 60
+        env:
+          AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scraped-data-${{ github.run_number }}
+          path: world_athletics_v2/data/scraped/*.parquet
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Daily Data Sync (v2)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Run Date:** $(date +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "**Mode:** ${{ github.event.inputs.mode || 'daily' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ -d "world_athletics_v2/data/scraped" ]; then
+            echo "| File | Size |" >> $GITHUB_STEP_SUMMARY
+            echo "|------|------|" >> $GITHUB_STEP_SUMMARY
+            for f in world_athletics_v2/data/scraped/*.parquet; do
+              if [ -f "$f" ]; then
+                size=$(du -h "$f" | cut -f1)
+                echo "| $(basename $f) | $size |" >> $GITHUB_STEP_SUMMARY
+              fi
+            done
+          fi

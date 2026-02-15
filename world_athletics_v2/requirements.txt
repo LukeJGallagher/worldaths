@@ -1,0 +1,22 @@
+# World Athletics Dashboard v2
+streamlit>=1.30.0
+pandas>=2.0.0
+numpy>=1.24.0
+plotly>=5.18.0
+duckdb>=0.10.0
+pyarrow>=14.0.0
+
+# API Client
+httpx>=0.25.0
+
+# Azure Storage
+azure-storage-blob>=12.19.0
+
+# Scrapers
+tqdm>=4.66.0
+
+# AI Chatbot (lazy loaded)
+# openai>=1.0.0  # For OpenRouter - install when needed
+
+# Report Generation (Phase 5)
+# reportlab>=4.0.0
