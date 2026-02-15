@@ -11,6 +11,7 @@ import pandas as pd
 TEAL_PRIMARY = "#235032"
 TEAL_DARK = "#1a3d25"
 GOLD_ACCENT = "#a08e66"
+GRAY_BLUE = "#78909C"
 STATUS_DANGER = "#dc3545"
 STATUS_NEUTRAL = "#6c757d"
 
@@ -128,7 +129,17 @@ def get_championship_targets(event: str) -> Dict[str, Dict]:
 
 
 def _normalize_event_for_lookup(event: str) -> str:
-    """Normalize event display name to match the standards dict keys."""
+    """Normalize event display name to match the standards dict keys.
+
+    Handles gender prefixes (Men's/Women's), multiple display formats,
+    and API discipline names.
+    """
+    # Strip gender prefix first
+    for prefix in ("Men's ", "Women's ", "men's ", "women's "):
+        if event.startswith(prefix):
+            event = event[len(prefix):]
+            break
+
     # Common display -> lookup mappings
     mappings = {
         "100m": "100m", "200m": "200m", "400m": "400m",
@@ -156,6 +167,8 @@ def _normalize_event_for_lookup(event: str) -> str:
         "hammer throw": "Hammer Throw", "hammer": "Hammer Throw", "hammer-throw": "Hammer Throw",
         # Combined
         "decathlon": "Decathlon",
+        # WA API format "Overall Ranking" → skip
+        "overall ranking": "",
     }
     # Try exact match first
     if event in ASIAN_GAMES_2026_TARGETS:
@@ -196,7 +209,7 @@ def get_status_color(status: str) -> str:
     colors = {
         "achieved": TEAL_PRIMARY,
         "close": GOLD_ACCENT,
-        "needs_work": STATUS_DANGER,
+        "needs_work": GRAY_BLUE,  # Neutral gray-blue, not red (coaching context)
         "unknown": STATUS_NEUTRAL,
     }
     return colors.get(status, STATUS_NEUTRAL)
@@ -224,7 +237,7 @@ def get_trend_color(trend: str) -> str:
     colors = {
         "improving": TEAL_PRIMARY,
         "stable": GOLD_ACCENT,
-        "declining": STATUS_DANGER,
+        "declining": GRAY_BLUE,  # Neutral gray-blue, not red
     }
     return colors.get(trend, STATUS_NEUTRAL)
 

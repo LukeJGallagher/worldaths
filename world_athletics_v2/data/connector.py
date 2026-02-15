@@ -35,6 +35,73 @@ LEGACY_DATA_DIR = Path(__file__).parent.parent.parent / "Data" / "parquet"
 
 CACHE_TTL = 3600  # 1 hour
 
+# ── Championship Host Lookup ──────────────────────────────────────────────
+# Maps championship type -> {year: [city patterns to match in venue column]}
+# master.parquet venue format: "Stadium, City (COUNTRY)" e.g. "Olympiastadion, Berlin (GER)"
+# We match year + city in venue to identify championship results.
+CHAMPIONSHIP_HOSTS = {
+    "Olympic Games": {
+        2024: ["Paris", "Saint-Denis"],
+        2021: ["Tokyo"],
+        2016: ["Rio"],
+        2012: ["London"],
+        2008: ["Beijing"],
+        2004: ["Athens"],
+        2000: ["Sydney"],
+    },
+    "World Championships": {
+        2025: ["Tokyo"],
+        2023: ["Budapest"],
+        2022: ["Eugene", "Hayward"],
+        2019: ["Doha", "Khalifa"],
+        2017: ["London"],
+        2015: ["Beijing"],
+        2013: ["Moscow", "Luzhniki"],
+        2011: ["Daegu"],
+        2009: ["Berlin"],
+        2007: ["Osaka"],
+        2005: ["Helsinki"],
+        2003: ["Paris", "Saint-Denis"],
+        2001: ["Edmonton"],
+    },
+    "Asian Games": {
+        2023: ["Hangzhou"],
+        2018: ["Jakarta", "Gelora"],
+        2014: ["Incheon"],
+        2010: ["Guangzhou"],
+        2006: ["Doha", "Khalifa"],
+        2002: ["Busan"],
+    },
+    "Asian Indoor Championships": {
+        2023: ["Astana"],
+        2022: ["Nur-Sultan", "Astana"],
+        2018: ["Tehran"],
+        2016: ["Doha"],
+        2014: ["Hangzhou"],
+        2012: ["Hangzhou"],
+    },
+}
+
+
+def _build_championship_venue_filter(championship_type: str) -> Optional[str]:
+    """Build a SQL WHERE clause to filter master data by known championship hosts.
+
+    Uses year + city combination to identify results from specific championships.
+    Returns None if no lookup available for the given championship type.
+    """
+    hosts = CHAMPIONSHIP_HOSTS.get(championship_type)
+    if not hosts:
+        return None
+
+    year_city_conds = []
+    for year, cities in hosts.items():
+        city_conds = " OR ".join(
+            f"venue ILIKE '%{city}%'" for city in cities
+        )
+        year_city_conds.append(f"(year = {year} AND ({city_conds}))")
+
+    return f"({' OR '.join(year_city_conds)})"
+
 
 def _normalize_gender_for_legacy(gender: str) -> str:
     """Map gender codes to legacy master format ('men'/'women')."""
@@ -400,8 +467,11 @@ class DataConnector:
                 safe_name = athlete_name.replace("'", "''")
                 conditions.append(f"full_name ILIKE '%{safe_name}%'")
             if discipline:
-                safe_disc = discipline.replace("'", "''")
-                conditions.append(f"discipline ILIKE '%{safe_disc}%'")
+                # Normalize both sides: v2 uses "100 Metres", pages pass "100m"
+                norm_disc = re.sub(r'[^0-9a-z]', '', _event_to_db_format(discipline).lower())
+                conditions.append(
+                    f"regexp_replace(LOWER(discipline), '[^0-9a-z]', '', 'g') = '{norm_disc}'"
+                )
 
             sql = "SELECT * FROM ksa_results"
             if conditions:
@@ -619,6 +689,7 @@ class DataConnector:
         gender: Optional[str] = None,
         country: Optional[str] = None,
         competition_keywords: Optional[List[str]] = None,
+        championship_type: Optional[str] = None,
         finals_only: bool = False,
         limit: int = 5000,
     ) -> pd.DataFrame:
@@ -628,18 +699,22 @@ class DataConnector:
             event: Display event name (e.g. '100m')
             gender: 'M' or 'F'
             country: Country code filter (e.g. 'KSA')
-            competition_keywords: List of keywords to match competition names
-                (e.g. ['Olympic', 'Asian Games'])
+            competition_keywords: DEPRECATED - use championship_type instead.
+                List of keywords to match venue text (unreliable).
+            championship_type: Championship name matching CHAMPIONSHIP_HOSTS keys
+                (e.g. 'Olympic Games', 'Asian Games', 'World Championships').
+                Uses year+city lookup for reliable filtering.
             finals_only: If True, only return final results (pos is plain number 1-8)
             limit: Max rows to return
 
         Returns:
             DataFrame with: competitor, nat, event, result, result_numeric, pos,
-            venue, date, year, competition (venue used as proxy)
+            venue, date, year
         """
         if "master" not in self._views_registered:
             return pd.DataFrame()
 
+        # We need year for championship filtering, so always extract it
         conditions = ["result_numeric IS NOT NULL"]
 
         if event:
@@ -653,13 +728,6 @@ class DataConnector:
         if country:
             conditions.append(f"UPPER(nat) = '{country.upper()}'")
 
-        if competition_keywords:
-            keyword_conds = []
-            for kw in competition_keywords:
-                safe_kw = kw.replace("'", "''")
-                keyword_conds.append(f"venue ILIKE '%{safe_kw}%'")
-            conditions.append(f"({' OR '.join(keyword_conds)})")
-
         if finals_only:
             # Finals positions are plain numbers (1-8), not 1sf3, 2h1, etc.
             conditions.append("regexp_matches(CAST(pos AS VARCHAR), '^[0-9]+$')")
@@ -668,15 +736,41 @@ class DataConnector:
         event_type = get_event_type(event) if event else "time"
         sort_order = "ASC" if event_type == "time" else "DESC"
 
+        # Build query - extract year first, then apply championship filter
         sql = f"""
-            WITH filtered AS (
+            WITH base AS (
                 SELECT
                     competitor, nat, event, result, result_numeric,
                     CAST(pos AS VARCHAR) AS pos, venue, date,
                     EXTRACT(YEAR FROM TRY_CAST(date AS DATE)) AS year
                 FROM master
                 WHERE {' AND '.join(conditions)}
-            ),
+            ),"""
+
+        # Apply championship filter using year+city lookup
+        champ_filter = None
+        if championship_type:
+            champ_filter = _build_championship_venue_filter(championship_type)
+        elif competition_keywords:
+            # Legacy fallback: keyword match on venue text (unreliable)
+            keyword_conds = []
+            for kw in competition_keywords:
+                safe_kw = kw.replace("'", "''")
+                keyword_conds.append(f"venue ILIKE '%{safe_kw}%'")
+            champ_filter = f"({' OR '.join(keyword_conds)})"
+
+        if champ_filter:
+            sql += f"""
+            filtered AS (
+                SELECT * FROM base WHERE {champ_filter}
+            ),"""
+        else:
+            sql += """
+            filtered AS (
+                SELECT * FROM base
+            ),"""
+
+        sql += f"""
             stats AS (
                 SELECT MEDIAN(result_numeric) AS med FROM filtered
             ),
@@ -757,6 +851,78 @@ class DataConnector:
         if conditions:
             sql += " WHERE " + " AND ".join(conditions)
         sql += f" ORDER BY world_rank ASC LIMIT {limit}"
+        return self.query(sql)
+
+    def get_top_performers(
+        self,
+        event: Optional[str] = None,
+        gender: Optional[str] = None,
+        country_codes: Optional[List[str]] = None,
+        year: Optional[int] = None,
+        limit: int = 25,
+    ) -> pd.DataFrame:
+        """Get top performers for an event from master data (correct gender).
+
+        Use this when rivals.parquet has wrong gender data.
+        Returns one row per athlete: their best recent result.
+        """
+        if "master" not in self._views_registered:
+            return pd.DataFrame()
+
+        import datetime as _dt
+        if year is None:
+            year = _dt.datetime.now().year
+
+        conditions = ["result_numeric IS NOT NULL"]
+
+        if event:
+            norm_event = re.sub(r'[^0-9a-z]', '', _event_to_db_format(event).lower())
+            conditions.append(
+                f"regexp_replace(LOWER(event), '[^0-9a-z]', '', 'g') = '{norm_event}'"
+            )
+        if gender:
+            g = _normalize_gender_for_legacy(gender)
+            conditions.append(f"LOWER(gender) = '{g}'")
+        if country_codes:
+            codes = ", ".join(f"'{c}'" for c in country_codes)
+            conditions.append(f"UPPER(nat) IN ({codes})")
+
+        from data.event_utils import get_event_type
+        event_type = get_event_type(event) if event else "time"
+        agg_func = "MIN" if event_type == "time" else "MAX"
+        sort_order = "ASC" if event_type == "time" else "DESC"
+
+        sql = f"""
+            WITH filtered AS (
+                SELECT competitor, nat, result, result_numeric, venue, date,
+                       EXTRACT(YEAR FROM TRY_CAST(date AS DATE)) AS yr
+                FROM master
+                WHERE {' AND '.join(conditions)}
+                  AND EXTRACT(YEAR FROM TRY_CAST(date AS DATE)) >= {year - 1}
+            ),
+            stats AS (
+                SELECT MEDIAN(result_numeric) AS med FROM filtered
+            ),
+            clean AS (
+                SELECT f.*
+                FROM filtered f, stats s
+                WHERE f.result_numeric BETWEEN s.med * 0.2 AND s.med * 5.0
+            ),
+            ranked AS (
+                SELECT competitor AS full_name,
+                       nat AS country_code,
+                       {agg_func}(result_numeric) AS best_mark_numeric,
+                       FIRST(result) AS pb_mark,
+                       COUNT(*) AS performances_count,
+                       MAX(date) AS latest_date,
+                       FIRST(venue) AS latest_venue
+                FROM clean
+                GROUP BY competitor, nat
+            )
+            SELECT * FROM ranked
+            ORDER BY best_mark_numeric {sort_order}
+            LIMIT {limit}
+        """
         return self.query(sql)
 
     # ── Qualifications ────────────────────────────────────────────────

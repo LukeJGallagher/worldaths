@@ -91,12 +91,12 @@ if len(ksa) > 0:
     column_config = {
         "full_name": st.column_config.TextColumn("Athlete", width="medium"),
         "primary_event": st.column_config.TextColumn("Event"),
-        "best_world_rank": st.column_config.NumberColumn("World Rank", format="%d"),
+        "best_world_rank": st.column_config.NumberColumn("World Rank", format="d"),
     }
     if "best_ranking_score" in ksa.columns:
-        column_config["best_ranking_score"] = st.column_config.NumberColumn("Score", format="%.0f")
+        column_config["best_ranking_score"] = st.column_config.NumberColumn("Score", format=",.0f")
     elif "best_score" in ksa.columns:
-        column_config["best_score"] = st.column_config.NumberColumn("Score", format="%.0f")
+        column_config["best_score"] = st.column_config.NumberColumn("Score", format=",.0f")
 
     st.dataframe(
         ksa[available_cols].head(20),

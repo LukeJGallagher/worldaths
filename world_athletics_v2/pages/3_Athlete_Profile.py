@@ -217,9 +217,9 @@ if len(pbs) > 0:
     elif "result" in available_cols:
         column_config["result"] = st.column_config.TextColumn("PB")
     if "result_score" in available_cols:
-        column_config["result_score"] = st.column_config.NumberColumn("WA Points", format="%.0f")
+        column_config["result_score"] = st.column_config.NumberColumn("WA Points", format=",.0f")
     elif "resultscore" in available_cols:
-        column_config["resultscore"] = st.column_config.NumberColumn("WA Points", format="%.0f")
+        column_config["resultscore"] = st.column_config.NumberColumn("WA Points", format=",.0f")
     if "venue" in available_cols:
         column_config["venue"] = st.column_config.TextColumn("Venue")
     if "date" in available_cols:
@@ -318,7 +318,7 @@ if len(sbs) > 0:
         column_config={
             "event": st.column_config.TextColumn("Event"),
             "result": st.column_config.TextColumn("SB"),
-            "resultscore": st.column_config.NumberColumn("WA Points", format="%.0f"),
+            "resultscore": st.column_config.NumberColumn("WA Points", format=",.0f"),
             "venue": st.column_config.TextColumn("Venue"),
             "date": st.column_config.TextColumn("Date"),
         },
@@ -391,10 +391,10 @@ if len(progression) > 0:
         progression[prog_avail],
         hide_index=True,
         column_config={
-            "year": st.column_config.NumberColumn("Year", format="%d"),
+            "year": st.column_config.NumberColumn("Year", format="d"),
             "event": st.column_config.TextColumn("Event"),
             "best_mark": st.column_config.TextColumn("Best Mark"),
-            "best_score": st.column_config.NumberColumn("WA Points", format="%.0f"),
+            "best_score": st.column_config.NumberColumn("WA Points", format=",.0f"),
             "venue": st.column_config.TextColumn("Venue"),
             "n_comps": st.column_config.NumberColumn("Comps"),
         },
@@ -488,9 +488,9 @@ if len(results) > 0:
     if "venue" in available_cols:
         column_config["venue"] = st.column_config.TextColumn("Venue")
     if "result_score" in available_cols:
-        column_config["result_score"] = st.column_config.NumberColumn("Points", format="%.0f")
+        column_config["result_score"] = st.column_config.NumberColumn("Points", format=",.0f")
     elif "resultscore" in available_cols:
-        column_config["resultscore"] = st.column_config.NumberColumn("Points", format="%.0f")
+        column_config["resultscore"] = st.column_config.NumberColumn("Points", format=",.0f")
 
     st.dataframe(
         results[available_cols],
@@ -582,10 +582,18 @@ if len(pbs) > 0:
         report_events = pbs[event_col_report].dropna().unique().tolist()
 
 if report_events:
-    col_rep1, col_rep2 = st.columns(2)
+    col_rep1, col_rep2, col_rep3 = st.columns(3)
     with col_rep1:
         report_event = st.selectbox("Report Event", report_events, key="ap_report_event")
     with col_rep2:
+        championship_options = [
+            "All Championships",
+            "Asian Games 2026",
+            "World Champs 2025",
+            "Olympics 2028",
+        ]
+        report_champ = st.selectbox("Championship Focus", championship_options, key="ap_report_champ")
+    with col_rep3:
         report_format = st.radio("Format", ["PDF", "HTML Preview"], horizontal=True, key="ap_report_fmt")
 
     if st.button("Generate Report", type="primary", key="ap_gen_report"):
@@ -593,8 +601,12 @@ if report_events:
             try:
                 from analytics.report_generator import PreCompReportGenerator
                 gen = PreCompReportGenerator(dc)
+                champ_filter = None if report_champ == "All Championships" else report_champ
                 if report_format == "PDF":
-                    pdf_bytes = gen.generate(selected_name, report_event, format="pdf")
+                    pdf_bytes = gen.generate(
+                        selected_name, report_event,
+                        format="pdf", championship=champ_filter,
+                    )
                     safe_filename = selected_name.replace(" ", "_").replace("'", "")
                     st.download_button(
                         "Download PDF",
@@ -604,7 +616,10 @@ if report_events:
                         key="ap_download_pdf",
                     )
                 else:
-                    html = gen.generate(selected_name, report_event, format="html")
+                    html = gen.generate(
+                        selected_name, report_event,
+                        format="html", championship=champ_filter,
+                    )
                     st.html(html)
             except Exception as e:
                 st.error(f"Report generation failed: {e}")

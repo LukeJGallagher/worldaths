@@ -250,55 +250,133 @@ region = None
 if "Asian" in championship:
     region = "asia"
 
-# Map display event to rivals event format
-rivals_event = _match_rivals_event(selected_event)
-rivals_df = dc.get_rivals(event=rivals_event, gender=athlete_gender, region=region, limit=30)
+# Use get_top_performers() for accurate gender-filtered competitors from master data
+# (rivals.parquet currently contains Women's data for all events due to API limitation)
+country_codes = list(ASIAN_COUNTRY_CODES) if region == "asia" else None
+rivals_df = dc.get_top_performers(
+    event=selected_event, gender=athlete_gender,
+    country_codes=country_codes, limit=30,
+)
+_using_master_performers = len(rivals_df) > 0
 
-# If no exact match, try alternate event format (some rivals use display names directly)
-if len(rivals_df) == 0 and rivals_event != selected_event.lower():
-    rivals_df = dc.get_rivals(event=selected_event.lower(), gender=athlete_gender, region=region, limit=30)
+# Fall back to rivals.parquet if master data unavailable
+if len(rivals_df) == 0:
+    rivals_event = _match_rivals_event(selected_event)
+    rivals_df = dc.get_rivals(event=rivals_event, gender=athlete_gender, region=region, limit=30)
+    if len(rivals_df) == 0 and rivals_event != selected_event.lower():
+        rivals_df = dc.get_rivals(event=selected_event.lower(), gender=athlete_gender, region=region, limit=30)
+    _using_master_performers = False
 
 if len(rivals_df) > 0:
-    # Build display dataframe
+    # Sort appropriately based on data source
+    if _using_master_performers:
+        # Already sorted by best_mark from get_top_performers()
+        pass
+    elif "world_rank" in rivals_df.columns:
+        rivals_df = rivals_df.sort_values("world_rank", na_position="last")
+
+    # Determine event type for formatting
+    from data.event_utils import get_event_type as _get_et
+    _etype = _get_et(selected_event)
+
+    def _fmt_mark(val):
+        """Format a numeric mark for display."""
+        try:
+            v = float(val)
+            if v >= 60:
+                mins = int(v // 60)
+                secs = v - mins * 60
+                return f"{mins}:{secs:05.2f}"
+            return f"{v:.2f}"
+        except (ValueError, TypeError):
+            return str(val) if _safe(val) else "-"
+
+    # Build display dataframe with all available columns
     display_data = []
-    for _, row in rivals_df.iterrows():
+    for rank_idx, (_, row) in enumerate(rivals_df.iterrows(), 1):
         nat = str(row.get("country_code", row.get("country", "")))
         flag = _get_flag(nat)
-        display_data.append({
-            "Athlete": str(row.get("full_name", row.get("athlete", ""))),
-            "Nat": f"{flag} {nat}",
-            "World Rank": row.get("world_rank", ""),
-            "Ranking Score": row.get("ranking_score", ""),
-            "Region": str(row.get("region", "")).title(),
-        })
+
+        if _using_master_performers:
+            best_num = row.get("best_mark_numeric")
+            entry = {
+                "#": rank_idx,
+                "Athlete": str(row.get("full_name", "")),
+                "Nat": f"{flag} {nat}",
+                "PB": _fmt_mark(row.get("pb_mark")) if _safe(row.get("pb_mark")) else (_fmt_mark(best_num) if _safe(best_num) else "-"),
+                "SB": _fmt_mark(best_num) if _safe(best_num) else "-",
+                "# Perfs": int(row.get("performances_count", 0)) if _safe(row.get("performances_count")) else "",
+                "Latest Date": str(row.get("latest_date", ""))[:10] if _safe(row.get("latest_date")) else "-",
+            }
+        else:
+            world_rank = row.get("world_rank")
+            ranking_score = row.get("ranking_score")
+            pb_val = row.get("pb_mark")
+            sb_val = row.get("sb_mark")
+            avg5 = row.get("best5_avg")
+            latest = row.get("latest_mark")
+            latest_date = row.get("latest_date")
+            entry = {
+                "#": int(world_rank) if _safe(world_rank) else rank_idx,
+                "Athlete": str(row.get("full_name", row.get("athlete", ""))),
+                "Nat": f"{flag} {nat}",
+                "PB": str(pb_val) if _safe(pb_val) else "-",
+                "SB": str(sb_val) if _safe(sb_val) else "-",
+                "# Perfs": int(row.get("performances_count", 0)) if _safe(row.get("performances_count")) else "",
+                "Latest Date": str(latest_date)[:11] if _safe(latest_date) else "-",
+            }
+
+        display_data.append(entry)
 
     display_df = pd.DataFrame(display_data)
-
-    # Highlight KSA rows
-    def highlight_ksa(row):
-        if "KSA" in str(row.get("Nat", "")):
-            return [f"background-color: rgba(35, 80, 50, 0.2); font-weight: bold"] * len(row)
-        return [""] * len(row)
-
-    st.dataframe(
-        display_df.style.apply(highlight_ksa, axis=1),
-        hide_index=True,
-        height=min(400, 35 * len(display_df) + 38),
-    )
 
     # Summary metrics
     total_rivals = len(display_df)
     asian_rivals = sum(1 for d in display_data if any(
         code in str(d["Nat"]) for code in ASIAN_COUNTRY_CODES
     ))
+    if _using_master_performers:
+        best_mark = rivals_df["best_mark_numeric"].iloc[0] if len(rivals_df) > 0 else None
+        best_str = _fmt_mark(best_mark) if best_mark else "N/A"
+    else:
+        best_rank = rivals_df["world_rank"].min() if "world_rank" in rivals_df.columns else None
+        best_str = f"#{int(best_rank)}" if best_rank else "N/A"
+
     sm1, sm2, sm3 = st.columns(3)
     with sm1:
-        st.metric("Total Rivals", total_rivals)
+        render_metric_card("Total Competitors", str(total_rivals), "neutral")
     with sm2:
-        st.metric("Asian Rivals", asian_rivals)
+        render_metric_card("Asian Competitors", str(asian_rivals), "good" if asian_rivals > 0 else "neutral")
     with sm3:
-        best_rank = rivals_df["world_rank"].min() if "world_rank" in rivals_df.columns else "N/A"
-        st.metric("Best Rival Rank", f"#{best_rank}" if best_rank != "N/A" else "N/A")
+        label = "Best Mark" if _using_master_performers else "Best Rank"
+        render_metric_card(label, best_str, "excellent")
+
+    # Highlight KSA rows
+    def highlight_ksa(row):
+        if "KSA" in str(row.get("Nat", "")):
+            return [f"background-color: rgba(35, 80, 50, 0.15); font-weight: bold"] * len(row)
+        return [""] * len(row)
+
+    st.dataframe(
+        display_df.style.apply(highlight_ksa, axis=1),
+        hide_index=True,
+        column_config={
+            "#": st.column_config.NumberColumn("#", width="small"),
+            "Athlete": st.column_config.TextColumn("Athlete", width="medium"),
+            "Nat": st.column_config.TextColumn("Nat", width="small"),
+            "PB": st.column_config.TextColumn("PB"),
+            "SB": st.column_config.TextColumn("SB"),
+            "# Perfs": st.column_config.NumberColumn("# Perfs", format="d"),
+            "Latest Date": st.column_config.TextColumn("Latest Date"),
+        },
+        height=min(500, 35 * len(display_df) + 38),
+    )
+
+    if all(d.get("PB") == "-" for d in display_data):
+        st.caption(
+            "PB/SB marks not yet scraped. "
+            "Run: `python -m scrapers.scrape_rival_profiles`"
+        )
 else:
     # Fallback: try to pull from world rankings and filter to region
     world_ranks = dc.get_world_rankings(event=selected_event, gender=athlete_gender, limit=50)

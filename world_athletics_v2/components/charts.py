@@ -6,6 +6,7 @@ All charts return go.Figure objects ready for st.plotly_chart().
 
 from typing import List, Optional, Dict, Any
 
+import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 import pandas as pd
@@ -56,13 +57,14 @@ def progression_chart(
             hover_parts.append("<br>".join(parts))
         hover_text = hover_parts
 
-    # Main trace with larger markers
+    # Main trace — spline curve with smaller markers for a smoother look
     scatter_kwargs = dict(
         x=df[x_col], y=df[y_col],
         mode="lines+markers",
-        line=dict(color=TEAL_PRIMARY, width=2.5),
-        marker=dict(size=8, color=TEAL_PRIMARY, line=dict(width=1, color="white")),
+        line=dict(color=TEAL_PRIMARY, width=2.5, shape="spline", smoothing=1.0),
+        marker=dict(size=6, color=TEAL_PRIMARY, line=dict(width=1, color="white")),
         name="Performance",
+        connectgaps=True,
     )
     if hover_text:
         scatter_kwargs["hovertext"] = hover_text
@@ -71,18 +73,27 @@ def progression_chart(
         scatter_kwargs["hovertemplate"] = "%{x}<br><b>%{y:.2f}</b><extra></extra>"
     fig.add_trace(go.Scatter(**scatter_kwargs))
 
-    # Trend line (rolling average)
+    # Smooth trend line using Gaussian-weighted moving average
     y_vals = pd.to_numeric(df[y_col], errors="coerce")
     valid_mask = y_vals.notna()
     if show_trend and valid_mask.sum() >= 4:
-        window = max(3, valid_mask.sum() // 4)
-        rolling_avg = y_vals.rolling(window=window, min_periods=2, center=True).mean()
+        n = valid_mask.sum()
+        # Gaussian kernel width adapts to dataset size
+        sigma = max(1.5, n / 5.0)
+        y_arr = y_vals[valid_mask].values
+        indices = np.arange(n, dtype=float)
+        smoothed = np.empty(n)
+        for i in range(n):
+            weights = np.exp(-0.5 * ((indices - i) / sigma) ** 2)
+            smoothed[i] = np.average(y_arr, weights=weights)
+
+        trend_x = df.loc[valid_mask, x_col]
         fig.add_trace(go.Scatter(
-            x=df[x_col], y=rolling_avg,
+            x=trend_x, y=smoothed,
             mode="lines",
-            line=dict(color=GOLD_ACCENT, width=2, dash="dot"),
+            line=dict(color=GOLD_ACCENT, width=2.5, shape="spline", smoothing=1.0),
             name="Trend",
-            opacity=0.7,
+            opacity=0.8,
         ))
 
     # Highlight best performance with star

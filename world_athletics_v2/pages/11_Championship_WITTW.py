@@ -1,8 +1,9 @@
 """
 Championship What It Takes to Win - Historical performance standards.
 
-Shows medal/finals/semi standards from benchmarks data, plus year-by-year
-finals trends from master data, and KSA championship results from v2 scrape.
+Shows medal/finals/semi standards from championship results data,
+plus year-by-year finals trends and KSA championship results.
+Standards are computed dynamically from the selected championship.
 """
 
 import streamlit as st
@@ -56,16 +57,22 @@ CHAMPIONSHIP_OPTIONS = [
     "Asian Games",
     "World Championships",
     "Olympic Games",
-    "Asian Indoor Championships",
 ]
 
-# Keywords to match competition names in ksa_results
-CHAMPIONSHIP_KEYWORDS = {
+# Keywords to match competition names in ksa_results.parquet (v2 scraped data)
+KSA_CHAMPIONSHIP_KEYWORDS = {
     "All Major Championships": None,
-    "Asian Games": ["Asian Games", "Asian Athletics", "Asian Championships", "Asian U18", "Asian Indoor"],
+    "Asian Games": ["Asian Games", "Asian Athletics", "Asian Championships"],
     "World Championships": ["World Athletics Championships", "World Championships"],
     "Olympic Games": ["Olympic"],
-    "Asian Indoor Championships": ["Asian Indoor"],
+}
+
+# Championship type keys for master.parquet venue+year lookup
+MASTER_CHAMPIONSHIP_TYPE = {
+    "All Major Championships": None,
+    "Asian Games": "Asian Games",
+    "World Championships": "World Championships",
+    "Olympic Games": "Olympic Games",
 }
 
 
@@ -113,135 +120,183 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ── Section 1: Championship Standards (from benchmarks.parquet) ───────────
+# ── Load championship results FIRST (used by both Section 1 and 2) ───────
 
-render_section_header(
-    "Championship Standards",
-    f"Medal and finals benchmarks for {event} {gender_label}",
-)
-
-if championship_type != "All Major Championships":
-    st.caption(
-        f"Standards shown are aggregated across all major championships. "
-        f"Championship-specific standards (e.g. Asian Games only) require "
-        f"dedicated championship results data."
-    )
-
-benchmarks = dc.get_benchmarks()
-
-event_db = display_to_db(event)
-event_norm = normalize_event_for_match(event_db)
-
-event_benchmarks = pd.DataFrame()
-if len(benchmarks) > 0:
-    event_benchmarks = benchmarks[
-        benchmarks.apply(
-            lambda row: (
-                normalize_event_for_match(str(row.get("Event", ""))) == event_norm
-                and str(row.get("Gender", "")).lower() == gender_legacy
-            ),
-            axis=1,
-        )
-    ]
-
-if len(event_benchmarks) > 0:
-    row = event_benchmarks.iloc[0]
-
-    col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-    with col_m1:
-        render_metric_card("Gold Standard", str(row.get("Gold Standard", "N/A")), "gold")
-    with col_m2:
-        render_metric_card("Bronze Standard", str(row.get("Bronze Standard", "N/A")), "excellent")
-    with col_m3:
-        render_metric_card("Finals (8th)", str(row.get("Final Standard (8th)", "N/A")), "good")
-    with col_m4:
-        render_metric_card("Top 8 Average", str(row.get("Top 8 Average", "N/A")), "neutral")
-
-    st.markdown("")
-
-    # Display full standards table
-    display_cols = [
-        "Gold Standard", "Silver Standard", "Bronze Standard",
-        "Final Standard (8th)", "Top 8 Average", "Sample Size",
-    ]
-    available_cols = [c for c in display_cols if c in event_benchmarks.columns]
-
-    if available_cols:
-        display_df = event_benchmarks[available_cols].copy()
-
-        def medal_style(row):
-            return [f"background-color: rgba(160, 142, 102, 0.15)"] * len(row)
-
-        st.dataframe(
-            display_df.style.apply(medal_style, axis=1),
-            hide_index=True,
-        )
-
-    # Standards waterfall chart
-    standards_dict = {}
-    bronze_raw = row.get("Bronze_Raw")
-    silver_raw = row.get("Silver_Raw")
-    gold_raw = row.get("Gold_Raw")
-
-    if pd.notna(gold_raw):
-        try:
-            gold_val = float(gold_raw)
-            bronze_val = float(bronze_raw) if pd.notna(bronze_raw) else gold_val
-            silver_val = float(silver_raw) if pd.notna(silver_raw) else gold_val
-
-            # Parse Final Standard (8th) - could be formatted string like "3:26.73"
-            finals_str = str(row.get("Final Standard (8th)", ""))
-            finals_val = None
-            if ":" in finals_str:
-                parts = finals_str.split(":")
-                try:
-                    finals_val = float(parts[0]) * 60 + float(parts[1])
-                except (ValueError, IndexError):
-                    pass
-            else:
-                try:
-                    finals_val = float(re.sub(r'[^0-9.]', '', finals_str))
-                except (ValueError, TypeError):
-                    pass
-
-            if finals_val:
-                standards_dict["Finals (8th place)"] = finals_val
-            standards_dict["Bronze Medal"] = bronze_val
-            standards_dict["Silver Medal"] = silver_val
-            standards_dict["Gold Medal"] = gold_val
-
-            fig_waterfall = standards_waterfall(
-                standards_dict,
-                title=f"{event} {gender_label} - Championship Standards",
-                lower_is_better=lower_is_better,
-            )
-            st.plotly_chart(fig_waterfall, use_container_width=True)
-        except (ValueError, TypeError):
-            pass
-else:
-    st.info(
-        f"No benchmark standards available for {event} {gender_label}. "
-        f"Benchmark data covers major championship events only."
-    )
-
-# ── Section 2: Year-by-Year Finals Trends (from master.parquet) ──────────
-
-render_section_header(
-    "Finals Performance by Year",
-    f"Year-by-year best finishing marks across all competition finals",
-)
-
-# Get finals data from master (pos = plain numbers 1-8)
+champ_type_for_master = MASTER_CHAMPIONSHIP_TYPE.get(championship_type)
 results = dc.get_championship_results(
     event=event,
     gender=gender,
     finals_only=True,
-    competition_keywords=None,
+    championship_type=champ_type_for_master,
     limit=10000,
 )
 
+# Fall back to ALL finals if championship-specific filter returned nothing
+_fell_back = False
+if len(results) == 0 and champ_type_for_master:
+    results = dc.get_championship_results(
+        event=event,
+        gender=gender,
+        finals_only=True,
+        championship_type=None,
+        limit=10000,
+    )
+    if len(results) > 0:
+        _fell_back = True
+
+
+# ── Section 1: Championship Standards ─────────────────────────────────────
+# When a specific championship is selected, compute standards DYNAMICALLY
+# from the filtered results. Otherwise use static benchmarks as fallback.
+
+render_section_header(
+    "Championship Standards",
+    f"Medal and finals benchmarks for {event} {gender_label} — {championship_type}",
+)
+
+# Try to compute dynamic standards from filtered results
+_dynamic_standards = {}
 if len(results) > 0:
-    st.caption(f"{len(results):,} finals results from all competitions")
+    results["_pos_num"] = pd.to_numeric(results["pos"], errors="coerce")
+    finals_8 = results[results["_pos_num"].between(1, 8)]
+
+    if len(finals_8) > 0:
+        gold_marks = finals_8[finals_8["_pos_num"] == 1]["result_numeric"]
+        silver_marks = finals_8[finals_8["_pos_num"] == 2]["result_numeric"]
+        bronze_marks = finals_8[finals_8["_pos_num"] == 3]["result_numeric"]
+        eighth_marks = finals_8[finals_8["_pos_num"] == 8]["result_numeric"]
+        top8_marks = finals_8["result_numeric"]
+
+        best_fn = "min" if lower_is_better else "max"
+
+        if len(gold_marks) > 0:
+            _dynamic_standards["gold_avg"] = gold_marks.mean()
+            _dynamic_standards["gold_best"] = getattr(gold_marks, best_fn)()
+        if len(silver_marks) > 0:
+            _dynamic_standards["silver_avg"] = silver_marks.mean()
+        if len(bronze_marks) > 0:
+            _dynamic_standards["bronze_avg"] = bronze_marks.mean()
+            _dynamic_standards["bronze_best"] = getattr(bronze_marks, best_fn)()
+        if len(eighth_marks) > 0:
+            _dynamic_standards["eighth_avg"] = eighth_marks.mean()
+        if len(top8_marks) > 0:
+            _dynamic_standards["top8_avg"] = top8_marks.mean()
+
+        _dynamic_standards["n_results"] = len(finals_8)
+
+    results = results.drop(columns=["_pos_num"])
+
+# Display standards: prefer dynamic from filtered results
+if _dynamic_standards:
+    source = championship_type if champ_type_for_master else "all competitions"
+    if _fell_back:
+        st.caption(
+            f"No results matched '{championship_type}' host venues. "
+            f"Showing standards from **all** finals data."
+        )
+    else:
+        st.caption(f"Standards computed from {_dynamic_standards.get('n_results', 0)} "
+                   f"finals results at {source}")
+
+    col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+    with col_m1:
+        val = format_mark(_dynamic_standards.get("gold_avg"), event_type)
+        render_metric_card("Gold Standard", val, "gold")
+    with col_m2:
+        val = format_mark(_dynamic_standards.get("bronze_avg"), event_type)
+        render_metric_card("Bronze Standard", val, "excellent")
+    with col_m3:
+        val = format_mark(_dynamic_standards.get("eighth_avg"), event_type)
+        render_metric_card("Finals (8th)", val, "good")
+    with col_m4:
+        val = format_mark(_dynamic_standards.get("top8_avg"), event_type)
+        render_metric_card("Top 8 Average", val, "neutral")
+
+    st.markdown("")
+
+    # Standards detail table
+    detail_data = {
+        "Gold (avg)": format_mark(_dynamic_standards.get("gold_avg"), event_type),
+        "Silver (avg)": format_mark(_dynamic_standards.get("silver_avg"), event_type),
+        "Bronze (avg)": format_mark(_dynamic_standards.get("bronze_avg"), event_type),
+        "Finals 8th (avg)": format_mark(_dynamic_standards.get("eighth_avg"), event_type),
+        "Top 8 Average": format_mark(_dynamic_standards.get("top8_avg"), event_type),
+        "Sample Size": str(_dynamic_standards.get("n_results", 0)),
+    }
+    detail_df = pd.DataFrame([detail_data])
+
+    def medal_style(row):
+        return [f"background-color: rgba(160, 142, 102, 0.15)"] * len(row)
+
+    st.dataframe(detail_df.style.apply(medal_style, axis=1), hide_index=True)
+
+    # Standards waterfall chart
+    standards_dict = {}
+    if "eighth_avg" in _dynamic_standards:
+        standards_dict["Finals (8th place)"] = _dynamic_standards["eighth_avg"]
+    if "bronze_avg" in _dynamic_standards:
+        standards_dict["Bronze Medal"] = _dynamic_standards["bronze_avg"]
+    if "silver_avg" in _dynamic_standards:
+        standards_dict["Silver Medal"] = _dynamic_standards["silver_avg"]
+    if "gold_avg" in _dynamic_standards:
+        standards_dict["Gold Medal"] = _dynamic_standards["gold_avg"]
+
+    if len(standards_dict) >= 2:
+        fig_waterfall = standards_waterfall(
+            standards_dict,
+            title=f"{event} {gender_label} - {source} Standards",
+            lower_is_better=lower_is_better,
+        )
+        st.plotly_chart(fig_waterfall, use_container_width=True)
+
+else:
+    # Fallback to static benchmarks
+    benchmarks = dc.get_benchmarks()
+    event_db = display_to_db(event)
+    event_norm = normalize_event_for_match(event_db)
+
+    event_benchmarks = pd.DataFrame()
+    if len(benchmarks) > 0:
+        event_benchmarks = benchmarks[
+            benchmarks.apply(
+                lambda row: (
+                    normalize_event_for_match(str(row.get("Event", ""))) == event_norm
+                    and str(row.get("Gender", "")).lower() == gender_legacy
+                ),
+                axis=1,
+            )
+        ]
+
+    if len(event_benchmarks) > 0:
+        st.caption("Using static benchmark standards (no championship-specific data available)")
+        row = event_benchmarks.iloc[0]
+
+        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+        with col_m1:
+            render_metric_card("Gold Standard", str(row.get("Gold Standard", "N/A")), "gold")
+        with col_m2:
+            render_metric_card("Bronze Standard", str(row.get("Bronze Standard", "N/A")), "excellent")
+        with col_m3:
+            render_metric_card("Finals (8th)", str(row.get("Final Standard (8th)", "N/A")), "good")
+        with col_m4:
+            render_metric_card("Top 8 Average", str(row.get("Top 8 Average", "N/A")), "neutral")
+    else:
+        st.info(
+            f"No standards available for {event} {gender_label}. "
+            f"No finals data found in the database for this event."
+        )
+
+
+# ── Section 2: Year-by-Year Finals Trends ─────────────────────────────────
+
+render_section_header(
+    "Finals Performance by Year",
+    f"Year-by-year best finishing marks — {championship_type}",
+)
+
+if len(results) > 0:
+    source_label = championship_type if champ_type_for_master else "all competitions"
+    st.caption(f"{len(results):,} finals results from {source_label}")
 
     # Year-by-year trend chart
     trend_data = get_standards_by_year(
@@ -347,20 +402,49 @@ else:
     )
 
 # ── Section: KSA Championship Results (from v2 ksa_results) ──────────────
-# This section uses ksa_results.parquet which HAS competition names,
-# so the championship filter actually works here.
 
 render_section_header(
     f"Team Saudi at {championship_type}",
     f"KSA athlete results filtered by championship",
 )
 
-# Query ksa_results with championship filter
+# Query v2 ksa_results (has competition names for proper championship filtering)
 ksa_champ_results = dc.get_ksa_results(discipline=event, limit=500)
 
+# If v2 returned data but without 'competition' column (legacy fallback), add it from venue
+if len(ksa_champ_results) > 0 and "competition" not in ksa_champ_results.columns:
+    if "venue" in ksa_champ_results.columns:
+        ksa_champ_results = ksa_champ_results.copy()
+        ksa_champ_results["competition"] = ksa_champ_results["venue"]
+    if "competitor" in ksa_champ_results.columns:
+        ksa_champ_results = ksa_champ_results.rename(columns={
+            "competitor": "full_name", "nat": "country_code",
+            "result": "mark", "pos": "place",
+        })
+
+# Also try master data for historical KSA results
+master_ksa_champ = dc.get_championship_results(
+    event=event, gender=gender, country="KSA",
+    championship_type=champ_type_for_master,
+    finals_only=False, limit=500,
+)
+if len(master_ksa_champ) > 0 and "competitor" in master_ksa_champ.columns:
+    master_renamed = master_ksa_champ.rename(columns={
+        "competitor": "full_name", "nat": "country_code",
+        "result": "mark", "pos": "place",
+    })
+    if "venue" in master_renamed.columns:
+        master_renamed["competition"] = master_renamed["venue"]
+    if len(ksa_champ_results) > 0:
+        ksa_champ_results = pd.concat([ksa_champ_results, master_renamed], ignore_index=True)
+        ksa_champ_results = ksa_champ_results.drop_duplicates(
+            subset=["full_name", "date", "mark"], keep="first"
+        )
+    else:
+        ksa_champ_results = master_renamed
+
 if len(ksa_champ_results) > 0 and "competition" in ksa_champ_results.columns:
-    # Apply championship keyword filter to the competition column
-    champ_keywords = CHAMPIONSHIP_KEYWORDS.get(championship_type)
+    champ_keywords = KSA_CHAMPIONSHIP_KEYWORDS.get(championship_type)
 
     if champ_keywords:
         mask = ksa_champ_results["competition"].apply(
@@ -369,7 +453,7 @@ if len(ksa_champ_results) > 0 and "competition" in ksa_champ_results.columns:
         )
         ksa_filtered = ksa_champ_results[mask]
     else:
-        ksa_filtered = ksa_champ_results  # "All" = show everything
+        ksa_filtered = ksa_champ_results
 
     if len(ksa_filtered) > 0:
         st.success(
@@ -381,7 +465,6 @@ if len(ksa_champ_results) > 0 and "competition" in ksa_champ_results.columns:
         available_cols = [c for c in display_cols if c in ksa_filtered.columns]
 
         if available_cols:
-            # Sort by date (parsed)
             if "date" in ksa_filtered.columns:
                 ksa_filtered = ksa_filtered.copy()
                 ksa_filtered["_parsed_date"] = pd.to_datetime(
@@ -404,7 +487,6 @@ if len(ksa_champ_results) > 0 and "competition" in ksa_champ_results.columns:
             )
             st.dataframe(display_df, hide_index=True, height=300)
 
-            # Medal count from this filtered data
             if "place" in ksa_filtered.columns:
                 places = pd.to_numeric(
                     ksa_filtered["place"].astype(str).str.strip(), errors="coerce"
@@ -433,7 +515,6 @@ if len(ksa_champ_results) > 0 and "competition" in ksa_champ_results.columns:
             st.info(f"No KSA results found for {event}.")
 
 elif len(results) > 0:
-    # Fall back to master data KSA finals (no competition name filter)
     ksa_finals = (
         results[results["nat"].str.upper() == "KSA"]
         if "nat" in results.columns
@@ -444,8 +525,6 @@ elif len(results) > 0:
         st.success(
             f"Found **{len(ksa_finals)}** KSA final appearance(s) in {event} {gender_label}."
         )
-        if championship_type != "All Major Championships":
-            st.caption("Showing all KSA finals (legacy data has no competition names for filtering)")
 
         display_cols_priority = [
             "pos", "competitor", "result", "venue", "date", "year",
@@ -474,9 +553,9 @@ else:
 st.markdown("---")
 st.markdown(
     f"<p style='color: {GRAY_BLUE}; font-size: 0.8rem; text-align: center;'>"
-    f"Championship standards from benchmarks database. "
-    f"Finals trends from World Athletics master database (positions 1-8). "
-    f"KSA championship results from v2 scraped data (competition name filtering). "
+    f"Standards computed dynamically from championship finals (positions 1-8). "
+    f"Championship filtering uses known host venue + year matching. "
+    f"KSA results from v2 scraped data with competition name filtering. "
     f"</p>",
     unsafe_allow_html=True,
 )

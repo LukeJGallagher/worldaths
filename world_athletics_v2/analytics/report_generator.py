@@ -61,6 +61,7 @@ class PreCompReportGenerator:
         event: str,
         competition: Optional[str] = None,
         format: str = "pdf",
+        championship: Optional[str] = None,
     ):
         """Generate a pre-competition report.
 
@@ -69,12 +70,14 @@ class PreCompReportGenerator:
             event: Display event name (e.g. '100m').
             competition: Optional competition name for the header.
             format: 'pdf' or 'html'.
+            championship: Filter to a specific championship
+                (e.g. "Asian Games 2026", "World Champs 2025", "Olympics 2028").
 
         Returns:
             bytes (PDF) or str (HTML).
         """
-        data = self._gather_data(athlete_name, event)
-        data["competition"] = competition or "Upcoming Competition"
+        data = self._gather_data(athlete_name, event, championship=championship)
+        data["competition"] = competition or championship or "Upcoming Competition"
         data["generated_date"] = datetime.now().strftime("%d %B %Y")
 
         if format == "pdf":
@@ -83,7 +86,7 @@ class PreCompReportGenerator:
 
     # ── Data Gathering ──────────────────────────────────────────────────
 
-    def _gather_data(self, athlete_name: str, event: str) -> dict:
+    def _gather_data(self, athlete_name: str, event: str, championship: Optional[str] = None) -> dict:
         """Collect all data needed for the report."""
         event_type = get_event_type(event)
         lower_is_better = event_type == "time"
@@ -113,16 +116,55 @@ class PreCompReportGenerator:
 
         trend = detect_trend(recent_marks, lower_is_better) if len(recent_marks) >= 3 else "unknown"
 
-        # Standards from season toplist
-        gender = self._infer_gender(athlete_info, event)
-        toplist = self.dc.get_season_toplist(event, gender, limit=100)
-        standards = self._compute_standards(toplist, lower_is_better)
+        # Championship-specific targets (Asian Games 2026, WC Tokyo 2025, LA 2028)
+        event_display = format_event_name(event) if event != format_event_name(event) else event
+        championship_targets = get_championship_targets(event_display)
 
-        # Gap analysis
+        # Filter to a specific championship if requested
+        if championship:
+            _champ_key_map = {
+                "Asian Games 2026": "Asian Games 2026 (Nagoya)",
+                "World Champs 2025": "World Champs 2025 (Tokyo)",
+                "Olympics 2028": "Olympics 2028 (Los Angeles)",
+            }
+            target_key = _champ_key_map.get(championship, championship)
+            championship_targets = {
+                k: v for k, v in championship_targets.items()
+                if target_key in k or championship.lower() in k.lower()
+            }
+
         athlete_mark = sb_mark or pb_mark
+
+        championship_target_rows = build_championship_target_rows(
+            championship_targets, athlete_mark, event_type, lower_is_better,
+        )
+
+        # Standards: use championship targets when a specific championship is selected,
+        # otherwise fall back to season toplist standards
+        gender = self._infer_gender(athlete_info, event)
+        standards = {}
         gaps = {}
-        if athlete_mark and standards:
-            gaps = gap_analysis(athlete_mark, standards, lower_is_better=lower_is_better)
+
+        if championship and championship_targets:
+            # Build standards dict from the selected championship's marks
+            champ_data = list(championship_targets.values())[0]
+            champ_marks = champ_data.get("marks", {})
+            # Map championship target keys to standard level names
+            _level_map = {
+                "gold": "Medal", "medal": "Medal",
+                "final": "Final", "entry": "Entry",
+            }
+            for key, mark_val in champ_marks.items():
+                level_name = _level_map.get(key, key.replace("_", " ").title())
+                standards[level_name] = mark_val
+            if athlete_mark and standards:
+                gaps = gap_analysis(athlete_mark, standards, lower_is_better=lower_is_better)
+        else:
+            # Generic standards from season toplist
+            toplist = self.dc.get_season_toplist(event, gender, limit=100)
+            standards = self._compute_standards(toplist, lower_is_better)
+            if athlete_mark and standards:
+                gaps = gap_analysis(athlete_mark, standards, lower_is_better=lower_is_better)
 
         # Advancement probabilities
         probabilities = self._compute_probabilities(
@@ -133,11 +175,9 @@ class PreCompReportGenerator:
         # Rivals
         rivals = self.dc.get_rivals(event=event, gender=gender, limit=10)
 
-        # Championship-specific targets (Asian Games 2026, WC Tokyo 2025, LA 2028)
-        event_display = format_event_name(event) if event != format_event_name(event) else event
-        championship_targets = get_championship_targets(event_display)
-        championship_target_rows = build_championship_target_rows(
-            championship_targets, athlete_mark, event_type, lower_is_better,
+        # Cross-event opportunity analysis: compare all athlete's events to targets
+        event_opportunities = self._compute_event_opportunities(
+            athlete_name, championship, championship_targets,
         )
 
         return {
@@ -146,6 +186,7 @@ class PreCompReportGenerator:
             "event_display": event_display,
             "event_type": event_type,
             "lower_is_better": lower_is_better,
+            "championship": championship,
             "pb": pb_mark,
             "sb": sb_mark,
             "recent_marks": recent_marks,
@@ -159,6 +200,7 @@ class PreCompReportGenerator:
             "rivals": rivals,
             "championship_targets": championship_targets,
             "championship_target_rows": championship_target_rows,
+            "event_opportunities": event_opportunities,
         }
 
     def _get_athlete_info(self, athlete_name: str, event: str) -> dict:
@@ -302,6 +344,101 @@ class PreCompReportGenerator:
 
         return probabilities
 
+    def _compute_event_opportunities(
+        self,
+        athlete_name: str,
+        championship: Optional[str],
+        championship_targets: dict,
+    ) -> list:
+        """Compare athlete's PBs across all events against championship targets.
+
+        Returns sorted list of dicts: event, pb, target_level, target_mark, gap, gap_pct, status
+        Sorted by smallest gap (best opportunities first).
+        """
+        pbs = self.dc.get_ksa_athlete_pbs(athlete_name)
+        if pbs is None or pbs.empty:
+            return []
+
+        disc_col = "discipline" if "discipline" in pbs.columns else "event"
+        mark_col = "mark" if "mark" in pbs.columns else "result"
+        if disc_col not in pbs.columns or mark_col not in pbs.columns:
+            return []
+
+        opportunities = []
+        for _, row in pbs.iterrows():
+            ev_raw = str(row.get(disc_col, ""))
+            ev_display = format_event_name(ev_raw)
+            if not ev_display or ev_display == "Overall Ranking":
+                continue
+
+            pb_val = pd.to_numeric(row.get(mark_col), errors="coerce")
+            if pd.isna(pb_val):
+                continue
+
+            et = get_event_type(ev_display)
+            lib = et == "time"
+
+            # Get championship targets for this event
+            targets = get_championship_targets(ev_display)
+            if championship and targets:
+                _champ_key_map = {
+                    "Asian Games 2026": "Asian Games 2026 (Nagoya)",
+                    "World Champs 2025": "World Champs 2025 (Tokyo)",
+                    "Olympics 2028": "Olympics 2028 (Los Angeles)",
+                }
+                target_key = _champ_key_map.get(championship, championship)
+                targets = {
+                    k: v for k, v in targets.items()
+                    if target_key in k or championship.lower() in k.lower()
+                }
+
+            if not targets:
+                continue
+
+            # Use the "final" target as the baseline comparison
+            champ_data = list(targets.values())[0]
+            marks = champ_data.get("marks", {})
+            final_mark = marks.get("final")
+            if final_mark is None:
+                continue
+
+            # Calculate gap
+            if lib:
+                gap = float(pb_val) - final_mark  # Negative = faster than target
+            else:
+                gap = final_mark - float(pb_val)  # Negative = exceeds target
+
+            # Gap as percentage of target
+            gap_pct = (abs(gap) / final_mark) * 100 if final_mark else 0
+
+            if gap <= 0:
+                status = "achieved"
+            elif gap_pct < 2:
+                status = "close"
+            else:
+                status = "needs_work"
+
+            opportunities.append({
+                "event": ev_display,
+                "pb": format_mark_display(float(pb_val), et),
+                "target": format_mark_display(final_mark, et),
+                "gap": gap,
+                "gap_display": format_gap_display(-gap if gap > 0 else gap, et),
+                "gap_pct": gap_pct,
+                "status": status,
+                "status_label": "Achieved" if status == "achieved" else (
+                    "Within Range" if status == "close" else "Needs Work"
+                ),
+                "color": get_status_color(status),
+            })
+
+        # Sort: achieved first, then by smallest gap_pct
+        opportunities.sort(key=lambda x: (
+            0 if x["status"] == "achieved" else (1 if x["status"] == "close" else 2),
+            x["gap_pct"],
+        ))
+        return opportunities
+
     # ── PDF Builder ─────────────────────────────────────────────────────
 
     def _build_pdf(self, data: dict) -> bytes:
@@ -418,7 +555,8 @@ class PreCompReportGenerator:
 
         # ── 3. Championship Standards ──
         if data["gaps"]:
-            elements.append(Paragraph("Championship Standards", styles["SectionTitle"]))
+            champ_name = data.get("championship") or "Championship"
+            elements.append(Paragraph(f"{champ_name} Standards", styles["SectionTitle"]))
 
             std_header = ["Level", "Standard", "Athlete Mark", "Gap", "Status"]
             std_rows = build_standards_rows(
@@ -491,6 +629,45 @@ class PreCompReportGenerator:
 
             ct_table.setStyle(TableStyle(ct_style_cmds))
             elements.append(ct_table)
+            elements.append(Spacer(1, 6 * mm))
+
+        # ── 3c. Event Opportunity Analysis ──
+        event_opps = data.get("event_opportunities", [])
+        if len(event_opps) > 1:
+            champ_label = data.get("championship") or "Championship"
+            elements.append(Paragraph(f"Where to Score Points ({champ_label})", styles["SectionTitle"]))
+
+            opp_header = ["Event", "PB", "Final Target", "Gap", "Status"]
+            opp_data = [opp_header]
+            opp_colors = []
+            for opp in event_opps:
+                opp_data.append([
+                    opp["event"], opp["pb"], opp["target"],
+                    opp["gap_display"], opp["status_label"],
+                ])
+                opp_colors.append(HexColor(opp["color"]))
+
+            opp_table = Table(
+                opp_data,
+                colWidths=[doc.width * f for f in [0.22, 0.18, 0.20, 0.22, 0.18]],
+            )
+            opp_style_cmds = [
+                ("BACKGROUND", (0, 0), (-1, 0), teal),
+                ("TEXTCOLOR", (0, 0), (-1, 0), white),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("ALIGN", (0, 1), (0, -1), "LEFT"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("GRID", (0, 0), (-1, -1), 0.5, HexColor("#dddddd")),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [white, HexColor("#f8f9fa")]),
+            ]
+            for i, color in enumerate(opp_colors):
+                opp_style_cmds.append(("TEXTCOLOR", (4, i + 1), (4, i + 1), color))
+                opp_style_cmds.append(("FONTNAME", (4, i + 1), (4, i + 1), "Helvetica-Bold"))
+            opp_table.setStyle(TableStyle(opp_style_cmds))
+            elements.append(opp_table)
             elements.append(Spacer(1, 6 * mm))
 
         # ── 4. Form & Projection ──
@@ -611,7 +788,7 @@ class PreCompReportGenerator:
                         elif raw_prob >= 40:
                             c = gold
                         else:
-                            c = danger
+                            c = neutral
                         prob_style_cmds.append(("TEXTCOLOR", (1, i), (2, i), c))
                         prob_style_cmds.append(("FONTNAME", (1, i), (1, i), "Helvetica-Bold"))
 
@@ -724,9 +901,10 @@ class PreCompReportGenerator:
             std_rows = build_standards_rows(
                 data["gaps"], data["sb"] or data["pb"] or 0, et, data["lower_is_better"],
             )
+            champ_name = data.get("championship") or "Championship"
             html_parts.append(f"""
 <h3 style="color: {TEAL_PRIMARY}; border-bottom: 2px solid {GOLD_ACCENT}; padding-bottom: 4px;">
-  Championship Standards
+  {champ_name} Standards
 </h3>
 <table>
   <thead><tr><th>Level</th><th>Standard</th><th>Athlete Mark</th><th>Gap</th><th>Status</th></tr></thead>
@@ -768,6 +946,35 @@ class PreCompReportGenerator:
       <td>{r['Gap']}</td>
       <td><span style="background: {badge_color}; color: white; padding: 2px 8px;
            border-radius: 4px; font-size: 0.8rem; font-weight: 600;">{r['Status']}</span></td>
+    </tr>
+""")
+            html_parts.append("  </tbody>\n</table>\n")
+
+        # ── Event Opportunity Analysis ──
+        event_opps = data.get("event_opportunities", [])
+        if len(event_opps) > 1:
+            champ_label = data.get("championship") or "Championship"
+            html_parts.append(f"""
+<h3 style="color: {TEAL_PRIMARY}; border-bottom: 2px solid {GOLD_ACCENT}; padding-bottom: 4px;">
+  Where to Score Points
+</h3>
+<p style="color: #666; font-size: 0.85rem; margin-bottom: 0.5rem;">
+  Events ranked by proximity to {champ_label} final target — focus on green/gold events
+</p>
+<table>
+  <thead><tr><th>Event</th><th>PB</th><th>Final Target</th><th>Gap</th><th>Status</th></tr></thead>
+  <tbody>
+""")
+            for opp in event_opps:
+                badge_color = opp["color"]
+                html_parts.append(f"""
+    <tr>
+      <td style="font-weight: 600; text-align: left;">{opp['event']}</td>
+      <td>{opp['pb']}</td>
+      <td>{opp['target']}</td>
+      <td>{opp['gap_display']}</td>
+      <td><span style="background: {badge_color}; color: white; padding: 2px 8px;
+           border-radius: 4px; font-size: 0.8rem; font-weight: 600;">{opp['status_label']}</span></td>
     </tr>
 """)
             html_parts.append("  </tbody>\n</table>\n")
@@ -834,7 +1041,7 @@ class PreCompReportGenerator:
                 prob = data["probabilities"].get(level)
                 if prob is None:
                     continue
-                bar_color = TEAL_PRIMARY if prob >= 70 else (GOLD_ACCENT if prob >= 40 else STATUS_DANGER)
+                bar_color = TEAL_PRIMARY if prob >= 70 else (GOLD_ACCENT if prob >= 40 else STATUS_NEUTRAL)
                 clamped = max(0, min(prob, 100))
                 html_parts.append(f"""
   <div style="margin-bottom: 8px;">

@@ -111,6 +111,12 @@ _API_DISCIPLINE_TO_DISPLAY = {
     "110 metres hurdles (91.4cm)": "110m H",
     "400m hurdles (84.0cm)": "400m H",
     "shot put (6kg)": "Shot Put",
+    # Shorthand formats from WA API primary_event field (e.g. "Men's 110mH")
+    "100mh": "100m H",
+    "110mh": "110m H",
+    "400mh": "400m H",
+    "3000msc": "3000m SC",
+    "overall ranking": "Overall Ranking",
 }
 
 # GraphQL API discipline codes (used by GetTopList, GetWorldRankings, etc.)
@@ -211,6 +217,14 @@ def normalize_event_for_match(event: str) -> str:
     return re.sub(r'[^0-9a-z]', '', event.lower())
 
 
+def _strip_gender_prefix(name: str) -> str:
+    """Strip 'Men's ' / 'Women's ' prefix from event names."""
+    for prefix in ("Men's ", "Women's ", "men's ", "women's "):
+        if name.startswith(prefix):
+            return name[len(prefix):]
+    return name
+
+
 def format_event_name(db_name: str) -> str:
     """Convert DB format or API format to display format.
 
@@ -218,16 +232,23 @@ def format_event_name(db_name: str) -> str:
         "100-metres" -> "100m"
         "100 Metres" -> "100m"
         "high-jump" -> "High Jump"
+        "Men's 100m" -> "100m"
+        "Women's 400m Hurdles" -> "400m H"
     """
+    # Strip gender prefix (e.g. "Men's 100m" -> "100m")
+    cleaned = _strip_gender_prefix(db_name)
     # Try DB format first (e.g. "100-metres")
-    if db_name in EVENT_DB_TO_DISPLAY:
-        return EVENT_DB_TO_DISPLAY[db_name]
+    if cleaned in EVENT_DB_TO_DISPLAY:
+        return EVENT_DB_TO_DISPLAY[cleaned]
     # Try WA API format (e.g. "100 Metres")
-    api_key = db_name.lower().strip()
+    api_key = cleaned.lower().strip()
     if api_key in _API_DISCIPLINE_TO_DISPLAY:
         return _API_DISCIPLINE_TO_DISPLAY[api_key]
+    # Try direct match (e.g. "100m" already in display format)
+    if cleaned in EVENT_DISPLAY_TO_DB or cleaned in DISCIPLINE_CODES:
+        return cleaned
     # Fallback: title case
-    return db_name.replace("-", " ").title()
+    return cleaned.replace("-", " ").title()
 
 
 def display_to_db(display_name: str) -> str:
