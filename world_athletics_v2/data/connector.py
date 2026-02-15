@@ -141,7 +141,7 @@ class DataConnector:
         self._register_views()
 
     def _try_azure_setup(self):
-        """Try to set up Azure Blob Storage access."""
+        """Try to set up Azure Blob Storage access and download parquet files."""
         conn_str = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
         if not conn_str:
             try:
@@ -154,8 +154,69 @@ class DataConnector:
             self._data_mode = "azure"
             self._azure_conn_str = conn_str
             logger.info("Data mode: Azure Blob Storage")
+            self._download_from_azure(conn_str)
         else:
             logger.info("Data mode: Local files")
+
+    def _download_from_azure(self, conn_str: str):
+        """Download parquet files from Azure Blob Storage if missing locally."""
+        try:
+            from azure.storage.blob import ContainerClient
+        except ImportError:
+            logger.warning("azure-storage-blob not installed, skipping Azure download")
+            return
+
+        container = "personal-data"
+        # v2 scraped data in Azure: athletics/v2/scraped/
+        v2_blobs = {
+            "ksa_athletes.parquet": "athletics/v2/scraped/ksa_athletes.parquet",
+            "ksa_personal_bests.parquet": "athletics/v2/scraped/ksa_personal_bests.parquet",
+            "ksa_results.parquet": "athletics/v2/scraped/ksa_results.parquet",
+            "world_rankings.parquet": "athletics/v2/scraped/world_rankings.parquet",
+            "mens_rankings.parquet": "athletics/v2/scraped/mens_rankings.parquet",
+            "calendar.parquet": "athletics/v2/scraped/calendar.parquet",
+            "upcoming.parquet": "athletics/v2/scraped/upcoming.parquet",
+            "recent_results.parquet": "athletics/v2/scraped/recent_results.parquet",
+            "rivals.parquet": "athletics/v2/scraped/rivals.parquet",
+        }
+        # Legacy data in Azure: athletics/
+        legacy_blobs = {
+            "master.parquet": "athletics/master.parquet",
+            "benchmarks.parquet": "athletics/benchmarks.parquet",
+            "ksa_profiles.parquet": "athletics/ksa_profiles.parquet",
+        }
+
+        try:
+            client = ContainerClient.from_connection_string(conn_str, container)
+        except Exception as e:
+            logger.warning(f"Failed to connect to Azure: {e}")
+            return
+
+        # Download v2 files to LOCAL_DATA_DIR
+        LOCAL_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        for filename, blob_path in v2_blobs.items():
+            local_path = LOCAL_DATA_DIR / filename
+            if not local_path.exists():
+                try:
+                    blob = client.get_blob_client(blob_path)
+                    data = blob.download_blob().readall()
+                    local_path.write_bytes(data)
+                    logger.info(f"Downloaded {blob_path} -> {local_path}")
+                except Exception as e:
+                    logger.debug(f"Blob not found: {blob_path} ({e})")
+
+        # Download legacy files to LEGACY_DATA_DIR
+        LEGACY_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        for filename, blob_path in legacy_blobs.items():
+            local_path = LEGACY_DATA_DIR / filename
+            if not local_path.exists():
+                try:
+                    blob = client.get_blob_client(blob_path)
+                    data = blob.download_blob().readall()
+                    local_path.write_bytes(data)
+                    logger.info(f"Downloaded {blob_path} -> {local_path}")
+                except Exception as e:
+                    logger.debug(f"Blob not found: {blob_path} ({e})")
 
     def _register_views(self):
         """Register DuckDB views for available parquet files."""
@@ -317,15 +378,59 @@ class DataConnector:
         """Get season bests per event for a KSA athlete.
 
         Returns best mark per event for the given season (default: latest year).
+        Tries v2 ksa_results first (has 2025 data), then falls back to legacy master.
         """
-        if "master" not in self._views_registered:
-            return pd.DataFrame()
-
-        from data.event_utils import get_event_type
         import datetime
 
         if season is None:
             season = datetime.datetime.now().year
+
+        # Try v2 ksa_results first (has 2025 data)
+        if "ksa_results" in self._views_registered and athlete_name:
+            safe_name = athlete_name.replace("'", "''")
+            sql = f"""
+                WITH parsed AS (
+                    SELECT *,
+                        CAST(result_score AS DOUBLE) AS score_num,
+                        TRY_CAST(
+                            CASE
+                                WHEN date LIKE '%% %%' THEN date
+                                ELSE NULL
+                            END AS DATE
+                        ) AS parsed_date
+                    FROM ksa_results
+                    WHERE full_name ILIKE '%{safe_name}%'
+                ),
+                with_year AS (
+                    SELECT *,
+                        COALESCE(
+                            EXTRACT(YEAR FROM parsed_date),
+                            TRY_CAST(RIGHT(date, 4) AS INTEGER)
+                        ) AS yr
+                    FROM parsed
+                ),
+                ranked AS (
+                    SELECT *,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY discipline
+                            ORDER BY score_num DESC NULLS LAST
+                        ) AS rn
+                    FROM with_year
+                    WHERE yr = {season}
+                )
+                SELECT discipline AS event, mark AS result, score_num AS resultscore,
+                       wind, venue, date
+                FROM ranked
+                WHERE rn = 1
+                ORDER BY score_num DESC NULLS LAST
+            """
+            result = self.query(sql)
+            if len(result) > 0:
+                return result
+
+        # Fall back to legacy master
+        if "master" not in self._views_registered:
+            return pd.DataFrame()
 
         conditions = ["nat = 'KSA'", "result_numeric IS NOT NULL", f"year = {season}"]
         if athlete_name:
@@ -358,12 +463,59 @@ class DataConnector:
         """Get average of top 5 performances per event for a KSA athlete.
 
         Returns one row per event with: event, top5_avg, top5_best, top5_worst, n_performances.
+        Tries v2 ksa_results first, then falls back to legacy master.
         """
+        safe_name = athlete_name.replace("'", "''")
+
+        # Try v2 ksa_results first
+        if "ksa_results" in self._views_registered:
+            disc_filter = ""
+            if discipline:
+                norm_disc = re.sub(r'[^0-9a-z]', '', _event_to_db_format(discipline).lower())
+                disc_filter = f"AND regexp_replace(LOWER(discipline), '[^0-9a-z]', '', 'g') = '{norm_disc}'"
+
+            sql = f"""
+                WITH parsed AS (
+                    SELECT discipline AS event, mark,
+                        TRY_CAST(mark AS DOUBLE) AS mark_numeric,
+                        CAST(result_score AS DOUBLE) AS score_num
+                    FROM ksa_results
+                    WHERE full_name ILIKE '%{safe_name}%'
+                      AND result_score IS NOT NULL
+                      AND CAST(result_score AS DOUBLE) > 0
+                      {disc_filter}
+                ),
+                ranked AS (
+                    SELECT *,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY event
+                            ORDER BY score_num DESC NULLS LAST
+                        ) AS rn
+                    FROM parsed
+                ),
+                top5 AS (
+                    SELECT * FROM ranked WHERE rn <= 5
+                )
+                SELECT
+                    event,
+                    ROUND(AVG(mark_numeric), 3) AS top5_avg,
+                    MIN(mark_numeric) AS top5_best,
+                    MAX(mark_numeric) AS top5_worst,
+                    COUNT(*) AS n_performances,
+                    ROUND(AVG(score_num), 0) AS avg_wa_points
+                FROM top5
+                GROUP BY event
+                ORDER BY avg_wa_points DESC NULLS LAST
+            """
+            result = self.query(sql)
+            if len(result) > 0:
+                return result
+
+        # Fall back to legacy master
         if "master" not in self._views_registered:
             return pd.DataFrame()
 
         conditions = ["nat = 'KSA'", "result_numeric IS NOT NULL"]
-        safe_name = athlete_name.replace("'", "''")
         conditions.append(f"competitor ILIKE '%{safe_name}%'")
 
         if discipline:
@@ -372,7 +524,6 @@ class DataConnector:
                 f"regexp_replace(LOWER(event), '[^0-9a-z]', '', 'g') = '{norm_disc}'"
             )
 
-        # Get top 5 by resultscore per event
         sql = f"""
             WITH ranked AS (
                 SELECT *,
@@ -407,12 +558,73 @@ class DataConnector:
         """Get year-by-year best marks for a KSA athlete.
 
         Returns: year, event, best_mark, best_numeric, best_score, n_comps.
+        Tries v2 ksa_results first, then falls back to legacy master.
         """
+        safe_name = athlete_name.replace("'", "''")
+
+        # Try v2 ksa_results first
+        if "ksa_results" in self._views_registered:
+            disc_filter = ""
+            if discipline:
+                norm_disc = re.sub(r'[^0-9a-z]', '', _event_to_db_format(discipline).lower())
+                disc_filter = f"AND regexp_replace(LOWER(discipline), '[^0-9a-z]', '', 'g') = '{norm_disc}'"
+
+            sql = f"""
+                WITH parsed AS (
+                    SELECT discipline AS event, mark,
+                        TRY_CAST(mark AS DOUBLE) AS mark_numeric,
+                        CAST(result_score AS DOUBLE) AS score_num,
+                        venue, date,
+                        COALESCE(
+                            EXTRACT(YEAR FROM TRY_CAST(date AS DATE)),
+                            TRY_CAST(RIGHT(date, 4) AS INTEGER)
+                        ) AS yr
+                    FROM ksa_results
+                    WHERE full_name ILIKE '%{safe_name}%'
+                      AND result_score IS NOT NULL
+                      AND CAST(result_score AS DOUBLE) > 0
+                      {disc_filter}
+                ),
+                ranked AS (
+                    SELECT *,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY event, yr
+                            ORDER BY score_num DESC NULLS LAST
+                        ) AS rn
+                    FROM parsed
+                    WHERE yr IS NOT NULL
+                )
+                SELECT yr AS year, event, mark AS best_mark, mark_numeric AS best_numeric,
+                       score_num AS best_score, venue, date
+                FROM ranked
+                WHERE rn = 1
+                ORDER BY event, yr DESC
+            """
+            count_sql = f"""
+                SELECT
+                    COALESCE(
+                        EXTRACT(YEAR FROM TRY_CAST(date AS DATE)),
+                        TRY_CAST(RIGHT(date, 4) AS INTEGER)
+                    ) AS year,
+                    discipline AS event,
+                    COUNT(*) AS n_comps
+                FROM ksa_results
+                WHERE full_name ILIKE '%{safe_name}%'
+                  {disc_filter}
+                GROUP BY year, event
+            """
+            main = self.query(sql)
+            counts = self.query(count_sql)
+            if not main.empty:
+                if not counts.empty:
+                    return main.merge(counts, on=["year", "event"], how="left")
+                return main
+
+        # Fall back to legacy master
         if "master" not in self._views_registered:
             return pd.DataFrame()
 
         conditions = ["nat = 'KSA'", "result_numeric IS NOT NULL"]
-        safe_name = athlete_name.replace("'", "''")
         conditions.append(f"competitor ILIKE '%{safe_name}%'")
 
         if discipline:
@@ -437,7 +649,6 @@ class DataConnector:
             WHERE rn = 1
             ORDER BY event, year DESC
         """
-        # Also get competition counts per year
         count_sql = f"""
             SELECT year, event, COUNT(*) AS n_comps
             FROM master

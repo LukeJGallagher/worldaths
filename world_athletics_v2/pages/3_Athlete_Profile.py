@@ -138,6 +138,85 @@ with col_info:
         actual_event_count = pbs_for_count[event_col_for_count].nunique() if event_col_for_count and len(pbs_for_count) > 0 else athlete.get("pb_count", 0)
         render_metric_card("Events", str(actual_event_count) if _safe(actual_event_count) else "N/A", "good" if _safe(actual_event_count) and int(actual_event_count) > 1 else "neutral")
 
+# ── Current Form Assessment ──────────────────────────────────────────
+
+render_section_header("Current Form", "Assessment based on recent competition performances")
+
+_form_results = dc.get_ksa_results(athlete_name=selected_name, limit=50)
+if len(_form_results) > 0:
+    from analytics.form_engine import calculate_form_score, project_performance, detect_trend
+    from data.event_utils import get_event_type as _get_evt_type, format_event_name as _fmt_form_ev
+
+    _f_disc_col = "discipline" if "discipline" in _form_results.columns else "event"
+    _f_mark_col = "mark" if "mark" in _form_results.columns else "result"
+
+    # Get primary event results
+    _primary_ev = athlete.get("primary_event", "")
+    if _safe(_primary_ev):
+        _form_ev_df = _form_results[_form_results[_f_disc_col] == str(_primary_ev)]
+    else:
+        _form_ev_df = _form_results
+
+    if len(_form_ev_df) >= 3:
+        _marks_raw = pd.to_numeric(_form_ev_df[_f_mark_col], errors="coerce").dropna().tolist()
+        if len(_marks_raw) >= 3:
+            _evt_type = _get_evt_type(str(_primary_ev)) if _safe(_primary_ev) else "time"
+            _lower = _evt_type == "time"
+
+            # Get PB for form calculation
+            _form_pb = None
+            _pbs_check = dc.get_ksa_athlete_pbs(selected_name)
+            if len(_pbs_check) > 0:
+                _pb_ev_col = "discipline" if "discipline" in _pbs_check.columns else "event"
+                _pb_mk_col = "mark" if "mark" in _pbs_check.columns else "result"
+                _ev_pbs = _pbs_check[_pbs_check[_pb_ev_col] == str(_primary_ev)] if _safe(_primary_ev) else _pbs_check
+                if len(_ev_pbs) > 0:
+                    _form_pb = pd.to_numeric(_ev_pbs[_pb_mk_col].iloc[0], errors="coerce")
+                    if pd.isna(_form_pb):
+                        _form_pb = None
+
+            _form_score = calculate_form_score(_marks_raw, pb=_form_pb, lower_is_better=_lower)
+            _projection = project_performance(_marks_raw, lower_is_better=_lower)
+            _trend = _projection.get("trend", "stable")
+
+            # Display form cards
+            _trend_arrows = {"improving": "↑", "stable": "→", "declining": "↓"}
+            _trend_colors = {"improving": "excellent", "stable": "good", "declining": "warning"}
+
+            fc1, fc2, fc3, fc4 = st.columns(4)
+            with fc1:
+                _form_status = "excellent" if _form_score >= 70 else "good" if _form_score >= 50 else "warning" if _form_score >= 30 else "danger"
+                render_metric_card("Form Score", f"{_form_score:.0f}/100", _form_status)
+            with fc2:
+                _proj_mark = _projection.get("projected_mark")
+                render_metric_card("Projected Mark", f"{_proj_mark:.2f}" if _proj_mark else "N/A", "good")
+            with fc3:
+                render_metric_card("Trend", f"{_trend_arrows.get(_trend, '→')} {_trend.title()}", _trend_colors.get(_trend, "neutral"))
+            with fc4:
+                render_metric_card("Recent Races", str(len(_marks_raw)), "good")
+
+            # Form gauge chart
+            fig_gauge = form_gauge(_form_score, label=f"Form: {_fmt_form_ev(str(_primary_ev)) if _safe(_primary_ev) else 'Overall'}")
+            st.plotly_chart(fig_gauge, use_container_width=True)
+
+            # Explanation
+            st.caption(
+                f"**How form is calculated:** Consistency (40%) — low variance in recent marks indicates reliable performance. "
+                f"Trend (30%) — linear regression on last {len(_marks_raw)} performances detects if marks are improving, stable, or declining. "
+                f"PB Proximity (30%) — how close recent best is to personal best. "
+                f"Projected mark uses recency-weighted average (most recent race weighted highest)."
+            )
+
+            # Confidence interval
+            _conf_lo = _projection.get("confidence_low")
+            _conf_hi = _projection.get("confidence_high")
+            if _conf_lo and _conf_hi:
+                st.info(f"**Projection range:** {_conf_lo:.2f} – {_conf_hi:.2f} (±1 standard deviation from projected {_proj_mark:.2f})")
+    else:
+        st.info("Need at least 3 recent competition results to calculate form. Currently have fewer results for the primary event.")
+else:
+    st.info("No recent competition results available for form assessment.")
+
 # ── Multi-Event Summary ──────────────────────────────────────────────
 
 pbs = dc.get_ksa_athlete_pbs(selected_name)
@@ -250,6 +329,11 @@ if len(pbs) > 0:
         )
         if fig_bars.data:
             st.plotly_chart(fig_bars, use_container_width=True)
+            st.caption(
+                "**WA Points** reflect the World Athletics ranking score for each personal best. "
+                "Higher-scoring events (gold bars) are where the athlete earns the most ranking points — "
+                "focus training and competition scheduling on these events for maximum ranking improvement."
+            )
 
     # ─ WA Points Scoring Heat Map (results over time) ─
     results_for_heatmap = dc.get_ksa_results(athlete_name=selected_name, limit=200)
@@ -275,6 +359,11 @@ if len(pbs) > 0:
                 fig_hm = wa_points_heatmap(hm_data, title=f"{selected_name} — Competition Scoring Map")
                 if fig_hm.data:
                     st.plotly_chart(fig_hm, use_container_width=True)
+                    st.caption(
+                        "**Scoring Heat Map** shows WA ranking points earned per event per month. "
+                        "Darker cells = higher scores. Helps identify peak performance months and "
+                        "which events are being contested most frequently."
+                    )
 
     # ─ Easy Points Summary ─
     if _sc_col and _ev_col and len(pbs) > 1:
@@ -432,6 +521,11 @@ if len(progression) > 0:
             hover_cols=["venue", "best_score", "n_comps"],
         )
         st.plotly_chart(fig, use_container_width=True)
+        st.caption(
+            "**Year-by-Year Progression** shows the best mark achieved in each calendar year. "
+            "The gold dashed line marks the personal best (PB). For time events, lower is better "
+            "(downward trend = improving). Hover over points for competition details."
+        )
 else:
     st.info("No year-by-year data available.")
 
@@ -539,6 +633,11 @@ if len(results) > 0:
                 hover_cols=_hover,
             )
             st.plotly_chart(fig, use_container_width=True)
+            st.caption(
+                "**Performance Progression** plots every competition result in chronological order. "
+                "The gold dashed line marks the PB. Each point is one race — hover for competition name, "
+                "venue, and finishing place. Useful for spotting form trends and peak periods."
+            )
 else:
     st.info("No competition results available. Run: `python -m scrapers.scrape_athletes`")
 
