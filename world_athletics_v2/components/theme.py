@@ -240,6 +240,23 @@ def render_metric_card(label: str, value: str, status: str = "neutral") -> None:
     """, unsafe_allow_html=True)
 
 
+def _get_last_scraped() -> str:
+    """Get the last scraped date from parquet file modification times."""
+    import os
+    from datetime import datetime
+    data_dir = Path(__file__).parent.parent / "data" / "scraped"
+    if not data_dir.exists():
+        return ""
+    latest = 0
+    for f in data_dir.glob("*.parquet"):
+        mtime = os.path.getmtime(f)
+        if mtime > latest:
+            latest = mtime
+    if latest > 0:
+        return datetime.fromtimestamp(latest).strftime("%d %b %Y")
+    return ""
+
+
 def render_sidebar() -> None:
     """Render the branded sidebar with logo."""
     logo = get_logo_b64()
@@ -251,12 +268,28 @@ def render_sidebar() -> None:
         </div>
         ''', unsafe_allow_html=True)
 
+    last_scraped = _get_last_scraped()
+    scraped_html = ""
+    if last_scraped:
+        scraped_html = f'<p style="color: rgba(255,255,255,0.5); font-size: 0.65rem; margin: 0.15rem 0 0 0;">Last updated: {last_scraped}</p>'
+
     st.sidebar.markdown(f'''
     <div style="text-align: center; padding: 0.25rem 0 0.75rem 0;">
         <p style="color: {GOLD_ACCENT}; font-size: 0.8rem; margin: 0; font-weight: 500;">World Athletics Intelligence</p>
         <p style="color: rgba(255,255,255,0.5); font-size: 0.7rem; margin: 0.15rem 0 0 0;">v2.0</p>
+        {scraped_html}
     </div>
     <hr style="border: none; border-top: 1px solid rgba(255,255,255,0.15); margin: 0;">
+    ''', unsafe_allow_html=True)
+
+    # Footer: attribution
+    st.sidebar.markdown(f'''
+    <div style="position: fixed; bottom: 0.5rem; left: 0; width: var(--sidebar-width, 21rem);
+         text-align: center; padding: 0.5rem;">
+        <p style="color: rgba(255,255,255,0.4); font-size: 0.6rem; margin: 0;">
+            App by Luke Gallagher
+        </p>
+    </div>
     ''', unsafe_allow_html=True)
 
 
