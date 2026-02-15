@@ -49,6 +49,44 @@ _LOCAL_THEME_DIR = Path(r"C:\Users\l.gallagher\OneDrive - Team Saudi\Documents\P
 THEME_DIR = _ASSETS_DIR if _ASSETS_DIR.exists() else _LOCAL_THEME_DIR
 
 
+def _download_assets_from_azure() -> None:
+    """Download theme assets from Azure if not available locally."""
+    import os
+
+    _ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+
+    conn_str = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
+    if not conn_str:
+        try:
+            conn_str = st.secrets.get("AZURE_STORAGE_CONNECTION_STRING")
+        except Exception:
+            pass
+
+    if not conn_str:
+        return
+
+    azure_assets = {
+        "team_saudi_banner.jpg": "athletics/v2/assets/team_saudi_banner.jpg",
+        "team_saudi_logo.jpg": "athletics/v2/assets/team_saudi_logo.jpg",
+    }
+
+    try:
+        from azure.storage.blob import ContainerClient
+
+        client = ContainerClient.from_connection_string(conn_str, "personal-data")
+        for filename, blob_path in azure_assets.items():
+            local_path = _ASSETS_DIR / filename
+            if not local_path.exists():
+                try:
+                    blob = client.get_blob_client(blob_path)
+                    data = blob.download_blob().readall()
+                    local_path.write_bytes(data)
+                except Exception:
+                    pass
+    except ImportError:
+        pass
+
+
 def _get_image_base64(image_path: Path) -> Optional[str]:
     """Load image as base64 string."""
     if image_path.exists():
@@ -58,12 +96,20 @@ def _get_image_base64(image_path: Path) -> Optional[str]:
 
 @st.cache_resource
 def get_banner_b64() -> Optional[str]:
-    return _get_image_base64(THEME_DIR / "team_saudi_banner.jpg")
+    path = THEME_DIR / "team_saudi_banner.jpg"
+    if not path.exists():
+        _download_assets_from_azure()
+        path = _ASSETS_DIR / "team_saudi_banner.jpg"
+    return _get_image_base64(path)
 
 
 @st.cache_resource
 def get_logo_b64() -> Optional[str]:
-    return _get_image_base64(THEME_DIR / "team_saudi_logo.jpg")
+    path = THEME_DIR / "team_saudi_logo.jpg"
+    if not path.exists():
+        _download_assets_from_azure()
+        path = _ASSETS_DIR / "team_saudi_logo.jpg"
+    return _get_image_base64(path)
 
 
 # ── CSS ───────────────────────────────────────────────────────────────

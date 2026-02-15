@@ -174,6 +174,7 @@ class DataConnector:
             "ksa_results.parquet": "athletics/v2/scraped/ksa_results.parquet",
             "world_rankings.parquet": "athletics/v2/scraped/world_rankings.parquet",
             "mens_rankings.parquet": "athletics/v2/scraped/mens_rankings.parquet",
+            "top_rankings.parquet": "athletics/v2/scraped/top_rankings.parquet",
             "calendar.parquet": "athletics/v2/scraped/calendar.parquet",
             "upcoming.parquet": "athletics/v2/scraped/upcoming.parquet",
             "recent_results.parquet": "athletics/v2/scraped/recent_results.parquet",

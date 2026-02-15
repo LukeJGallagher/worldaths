@@ -68,6 +68,17 @@ jobs:
           python -m scrapers.pipeline --${MODE}
         timeout-minutes: 45
 
+      - name: Upload scraped data to Azure Blob Storage
+        env:
+          AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+        run: |
+          cd world_athletics_v2
+          python -c "
+          from scrapers.pipeline import upload_to_azure
+          upload_to_azure()
+          "
+        continue-on-error: true
+
       - name: Validate scraped data
         run: |
           cd world_athletics_v2

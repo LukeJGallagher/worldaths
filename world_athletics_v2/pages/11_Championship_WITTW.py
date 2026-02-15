@@ -4,16 +4,21 @@ Championship What It Takes to Win - Historical performance standards.
 Shows medal/finals/semi standards from championship results data,
 plus year-by-year finals trends and KSA championship results.
 Standards are computed dynamically from the selected championship.
+Includes exportable HTML report matching Pre-Comp Briefing format.
 """
 
+import base64
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import re
+from datetime import datetime
+from typing import Optional, Dict
 
 from components.theme import (
     get_theme_css, render_page_header, render_section_header,
-    render_metric_card, render_sidebar, TEAL_PRIMARY, GOLD_ACCENT,
-    TEAL_LIGHT, GRAY_BLUE, HEADER_GRADIENT,
+    render_metric_card, render_sidebar, TEAL_PRIMARY, TEAL_DARK,
+    GOLD_ACCENT, TEAL_LIGHT, GRAY_BLUE, HEADER_GRADIENT, get_logo_b64,
 )
 from components.charts import (
     championship_trends_chart, place_distribution_chart, standards_waterfall,
@@ -93,6 +98,299 @@ def format_mark(value, event_type: str) -> str:
             return f"{minutes}:{seconds:05.2f}"
         return f"{value:.2f}"
     return f"{value:.2f}"
+
+
+# ── HTML Report Builder ──────────────────────────────────────────────────
+
+
+def _chart_to_b64(fig) -> Optional[str]:
+    """Convert a Plotly figure to base64 PNG string."""
+    try:
+        img_bytes = fig.to_image(format="png", width=750, height=420, scale=2)
+        return base64.b64encode(img_bytes).decode()
+    except Exception:
+        return None
+
+
+def build_wittw_report_html(
+    event: str,
+    gender_label: str,
+    championship_type: str,
+    summary_df: pd.DataFrame,
+    trend_data: pd.DataFrame,
+    ksa_results_df: pd.DataFrame,
+    dynamic_standards: Dict,
+    event_type: str,
+    lower_is_better: bool,
+    logo_b64: Optional[str] = None,
+    standalone: bool = False,
+) -> str:
+    """Build standalone HTML report for Championship WITTW analysis.
+
+    Matches the Pre-Comp Briefing visual style: dark green gradient,
+    two-column layout, Team Saudi branding.
+    """
+    now = datetime.now()
+    date_str = now.strftime("%d %b %Y")
+
+    # ── Logo HTML ──
+    logo_html = ""
+    if logo_b64:
+        logo_html = (
+            f'<img src="data:image/jpeg;base64,{logo_b64}" '
+            f'style="height: 55px; border-radius: 6px;">'
+        )
+
+    # ── Standards metric cards ──
+    gold_val = format_mark(dynamic_standards.get("gold_avg"), event_type)
+    silver_val = format_mark(dynamic_standards.get("silver_avg"), event_type)
+    bronze_val = format_mark(dynamic_standards.get("bronze_avg"), event_type)
+    eighth_val = format_mark(dynamic_standards.get("eighth_avg"), event_type)
+    top8_val = format_mark(dynamic_standards.get("top8_avg"), event_type)
+    n_results = dynamic_standards.get("n_results", 0)
+
+    standards_cards_html = f"""
+    <div style="display: flex; gap: 10px; margin-bottom: 1rem;">
+        <div style="flex: 1; background: {GOLD_ACCENT}; padding: 0.6rem; border-radius: 8px; text-align: center;">
+            <div style="color: rgba(255,255,255,0.8); font-size: 0.7rem;">Gold Standard</div>
+            <div style="color: white; font-size: 1.2rem; font-weight: 700;">{gold_val}</div>
+        </div>
+        <div style="flex: 1; background: #C0C0C0; padding: 0.6rem; border-radius: 8px; text-align: center;">
+            <div style="color: rgba(0,0,0,0.6); font-size: 0.7rem;">Silver Standard</div>
+            <div style="color: #333; font-size: 1.2rem; font-weight: 700;">{silver_val}</div>
+        </div>
+        <div style="flex: 1; background: #CD7F32; padding: 0.6rem; border-radius: 8px; text-align: center;">
+            <div style="color: rgba(255,255,255,0.8); font-size: 0.7rem;">Bronze Standard</div>
+            <div style="color: white; font-size: 1.2rem; font-weight: 700;">{bronze_val}</div>
+        </div>
+        <div style="flex: 1; background: {TEAL_PRIMARY}; padding: 0.6rem; border-radius: 8px; text-align: center;">
+            <div style="color: rgba(255,255,255,0.8); font-size: 0.7rem;">Finals (8th)</div>
+            <div style="color: white; font-size: 1.2rem; font-weight: 700;">{eighth_val}</div>
+        </div>
+    </div>"""
+
+    # ── Summary table rows ──
+    summary_rows = ""
+    if not summary_df.empty:
+        medal_colors = {
+            1: f"background: rgba(160, 142, 102, 0.35);",  # Gold
+            2: f"background: rgba(192, 192, 192, 0.30);",  # Silver
+            3: f"background: rgba(205, 127, 50, 0.30);",   # Bronze
+        }
+        place_labels = {1: "1st", 2: "2nd", 3: "3rd", 4: "4th", 5: "5th", 6: "6th", 7: "7th", 8: "8th"}
+        for _, row in summary_df.iterrows():
+            place = int(row["place"])
+            row_bg = medal_colors.get(place, "background: rgba(255,255,255,0.04);")
+            label = place_labels.get(place, f"{place}th")
+            avg = format_mark(row.get("avg_mark"), event_type)
+            best = format_mark(row.get("fastest"), event_type)
+            worst = format_mark(row.get("slowest"), event_type)
+            n = int(row.get("n_results", 0))
+            summary_rows += (
+                f'<tr style="{row_bg}">'
+                f'<td style="padding: 6px 10px; color: white; font-size: 0.82rem; font-weight: 600;">{label}</td>'
+                f'<td style="padding: 6px 10px; color: white; font-size: 0.82rem; text-align: center;">{avg}</td>'
+                f'<td style="padding: 6px 10px; color: white; font-size: 0.82rem; text-align: center;">{best}</td>'
+                f'<td style="padding: 6px 10px; color: white; font-size: 0.82rem; text-align: center;">{worst}</td>'
+                f'<td style="padding: 6px 10px; color: rgba(255,255,255,0.7); font-size: 0.82rem; text-align: center;">{n}</td>'
+                f'</tr>'
+            )
+    else:
+        summary_rows = (
+            '<tr><td colspan="5" style="padding: 15px; color: rgba(255,255,255,0.5); '
+            'text-align: center;">No finals data available</td></tr>'
+        )
+
+    # ── Trend chart as embedded PNG ──
+    chart_html = ""
+    if not trend_data.empty:
+        fig = championship_trends_chart(
+            trend_data,
+            title=f"{event} {gender_label} — Finals Performance by Place",
+            lower_is_better=lower_is_better,
+        )
+        # Style for dark background export
+        fig.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(255,255,255,0.06)",
+            font=dict(color="white"),
+            title=dict(font=dict(color="white")),
+            legend=dict(font=dict(color="white")),
+            height=400,
+        )
+        fig.update_xaxes(
+            gridcolor="rgba(255,255,255,0.1)",
+            tickfont=dict(color="rgba(255,255,255,0.8)"),
+            title_font=dict(color="rgba(255,255,255,0.8)"),
+        )
+        fig.update_yaxes(
+            gridcolor="rgba(255,255,255,0.1)",
+            tickfont=dict(color="rgba(255,255,255,0.8)"),
+            title_font=dict(color="rgba(255,255,255,0.8)"),
+        )
+
+        chart_b64 = _chart_to_b64(fig)
+        if chart_b64:
+            chart_html = (
+                f'<img src="data:image/png;base64,{chart_b64}" '
+                f'style="width: 100%; border-radius: 8px;">'
+            )
+        else:
+            chart_html = (
+                '<p style="color: rgba(255,255,255,0.5); text-align: center; '
+                'padding: 2rem;">Chart export requires Kaleido package</p>'
+            )
+    else:
+        chart_html = (
+            '<p style="color: rgba(255,255,255,0.5); text-align: center; '
+            'padding: 2rem;">Insufficient data for trend chart</p>'
+        )
+
+    # ── KSA results rows ──
+    ksa_rows_html = ""
+    if not ksa_results_df.empty:
+        display_cols = {
+            "full_name": "Athlete", "competitor": "Athlete",
+            "date": "Date", "competition": "Competition", "venue": "Venue",
+            "mark": "Mark", "result": "Mark", "place": "Place", "pos": "Place",
+        }
+        # Find available columns
+        for idx, (_, row) in enumerate(ksa_results_df.head(10).iterrows()):
+            name = str(row.get("full_name", row.get("competitor", "-")))
+            date_val = str(row.get("date", "-"))
+            comp = str(row.get("competition", row.get("venue", "-")))
+            if len(comp) > 35:
+                comp = comp[:32] + "..."
+            mark = str(row.get("mark", row.get("result", "-")))
+            place = str(row.get("place", row.get("pos", "-")))
+            row_bg = "background: rgba(255,255,255,0.05);" if idx % 2 == 0 else ""
+            ksa_rows_html += (
+                f'<tr style="{row_bg}">'
+                f'<td style="padding: 5px 10px; color: white; font-size: 0.82rem;">{name}</td>'
+                f'<td style="padding: 5px 10px; color: rgba(255,255,255,0.8); font-size: 0.82rem;">{date_val}</td>'
+                f'<td style="padding: 5px 10px; color: rgba(255,255,255,0.8); font-size: 0.82rem;">{comp}</td>'
+                f'<td style="padding: 5px 10px; color: white; font-size: 0.82rem; font-weight: 600;">{mark}</td>'
+                f'<td style="padding: 5px 10px; color: white; font-size: 0.82rem; text-align: center;">{place}</td>'
+                f'</tr>'
+            )
+
+    ksa_section_html = ""
+    if ksa_rows_html:
+        ksa_section_html = f"""
+        <div style="margin-top: 1.2rem;">
+            <div style="background: rgba(255,255,255,0.08); border-radius: 8px; padding: 0.7rem;
+                 border: 1px solid rgba(255,255,255,0.12);">
+                <h4 style="color: {GOLD_ACCENT}; margin: 0 0 0.5rem 0; font-size: 0.9rem; font-weight: 600;">
+                    Team Saudi Championship Results
+                </h4>
+                <table style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr style="border-bottom: 1px solid rgba(255,255,255,0.2);">
+                            <th style="padding: 5px 10px; color: rgba(255,255,255,0.7); font-size: 0.75rem; text-align: left;">Athlete</th>
+                            <th style="padding: 5px 10px; color: rgba(255,255,255,0.7); font-size: 0.75rem; text-align: left;">Date</th>
+                            <th style="padding: 5px 10px; color: rgba(255,255,255,0.7); font-size: 0.75rem; text-align: left;">Competition</th>
+                            <th style="padding: 5px 10px; color: rgba(255,255,255,0.7); font-size: 0.75rem; text-align: left;">Mark</th>
+                            <th style="padding: 5px 10px; color: rgba(255,255,255,0.7); font-size: 0.75rem; text-align: center;">Place</th>
+                        </tr>
+                    </thead>
+                    <tbody>{ksa_rows_html}</tbody>
+                </table>
+            </div>
+        </div>"""
+
+    # ── Build full HTML ──
+    standalone_head = (
+        '<!DOCTYPE html>\n<html lang="en"><head><meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        '<style>* { margin: 0; padding: 0; box-sizing: border-box; }\n'
+        'body { font-family: Inter, -apple-system, sans-serif; background: #111; padding: 1.5rem; }\n'
+        '@media print { body { background: white; padding: 0; } }</style>\n'
+        '</head><body>\n'
+    ) if standalone else ""
+    standalone_foot = "\n</body></html>" if standalone else ""
+
+    html = f"""{standalone_head}
+<div style="background: linear-gradient(135deg, {TEAL_DARK} 0%, {TEAL_PRIMARY} 40%, {TEAL_DARK} 100%);
+     border-radius: 12px; padding: 1.5rem 2rem; font-family: Inter, -apple-system, sans-serif;
+     max-width: 1400px; margin: 0 auto;">
+
+    <!-- ═══ HEADER ═══ -->
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1.2rem;
+         border-bottom: 3px solid {GOLD_ACCENT}; padding-bottom: 1rem;">
+        <div>
+            <h1 style="color: white; margin: 0; font-size: 1.65rem; font-weight: 700; letter-spacing: -0.5px;">
+                Major Championship Final Performances
+            </h1>
+            <h2 style="color: {GOLD_ACCENT}; margin: 0.3rem 0 0 0; font-size: 1.15rem; font-weight: 500;">
+                {event} {gender_label} &mdash; {championship_type}
+            </h2>
+        </div>
+        <div style="display: flex; align-items: center; gap: 12px;">
+            {logo_html}
+        </div>
+    </div>
+
+    <!-- ═══ STANDARDS CARDS ═══ -->
+    {standards_cards_html}
+
+    <!-- ═══ TWO-COLUMN LAYOUT ═══ -->
+    <div style="display: flex; gap: 1.5rem; align-items: flex-start;">
+
+        <!-- LEFT: Finals Summary Table -->
+        <div style="width: 40%; min-width: 300px; flex-shrink: 0;">
+            <div style="background: rgba(255,255,255,0.08); border-radius: 8px; padding: 0.7rem;
+                 border: 1px solid rgba(255,255,255,0.12);">
+                <h4 style="color: {GOLD_ACCENT}; margin: 0 0 0.5rem 0; font-size: 0.9rem; font-weight: 600;">
+                    Finals Summary by Place ({n_results} results)
+                </h4>
+                <table style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr style="background: rgba(255,255,255,0.1); border-bottom: 2px solid rgba(255,255,255,0.2);">
+                            <th style="padding: 6px 10px; color: rgba(255,255,255,0.9); font-size: 0.75rem; text-align: left;">Place</th>
+                            <th style="padding: 6px 10px; color: rgba(255,255,255,0.9); font-size: 0.75rem; text-align: center;">Average</th>
+                            <th style="padding: 6px 10px; color: rgba(255,255,255,0.9); font-size: 0.75rem; text-align: center;">Best</th>
+                            <th style="padding: 6px 10px; color: rgba(255,255,255,0.9); font-size: 0.75rem; text-align: center;">Slowest</th>
+                            <th style="padding: 6px 10px; color: rgba(255,255,255,0.9); font-size: 0.75rem; text-align: center;">#</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {summary_rows}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- RIGHT: Trend Chart -->
+        <div style="flex: 1;">
+            <div style="background: rgba(255,255,255,0.08); border-radius: 8px; padding: 0.7rem;
+                 border: 1px solid rgba(255,255,255,0.12);">
+                <h4 style="color: {GOLD_ACCENT}; margin: 0 0 0.5rem 0; font-size: 0.9rem; font-weight: 600;">
+                    Performance Trends by Year
+                </h4>
+                {chart_html}
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ KSA RESULTS (optional) ═══ -->
+    {ksa_section_html}
+
+    <!-- ═══ FOOTER ═══ -->
+    <div style="margin-top: 1rem; padding-top: 0.5rem; border-top: 1px solid rgba(255,255,255,0.1);
+         display: flex; justify-content: space-between; align-items: center;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+            {logo_html}
+            <span style="color: rgba(255,255,255,0.4); font-size: 0.72rem;">
+                Team Saudi Performance Analysis
+            </span>
+        </div>
+        <div style="color: rgba(255,255,255,0.4); font-size: 0.72rem;">
+            Data: World Athletics | Generated {date_str}
+        </div>
+    </div>
+</div>{standalone_foot}"""
+
+    return html
 
 
 # ── Filters Row ───────────────────────────────────────────────────────────
@@ -403,6 +701,9 @@ else:
 
 # ── Section: KSA Championship Results (from v2 ksa_results) ──────────────
 
+# Initialize KSA results for export section below
+_export_ksa_results = pd.DataFrame()
+
 render_section_header(
     f"Team Saudi at {championship_type}",
     f"KSA athlete results filtered by championship",
@@ -454,6 +755,8 @@ if len(ksa_champ_results) > 0 and "competition" in ksa_champ_results.columns:
         ksa_filtered = ksa_champ_results[mask]
     else:
         ksa_filtered = ksa_champ_results
+
+    _export_ksa_results = ksa_filtered  # Capture for export section
 
     if len(ksa_filtered) > 0:
         st.success(
@@ -520,6 +823,7 @@ elif len(results) > 0:
         if "nat" in results.columns
         else pd.DataFrame()
     )
+    _export_ksa_results = ksa_finals  # Capture for export section
 
     if len(ksa_finals) > 0:
         st.success(
@@ -547,6 +851,77 @@ elif len(results) > 0:
         )
 else:
     st.info(f"No KSA data available for {event}.")
+
+# ── Section: Export Report ────────────────────────────────────────────────
+
+render_section_header(
+    "Export Report",
+    "Download championship analysis as standalone HTML",
+)
+
+if len(results) > 0 and _dynamic_standards:
+    # Build summary and trend data for export
+    _export_summary = get_finals_summary_by_place(results, max_place=8, lower_is_better=lower_is_better)
+    _export_trends = get_standards_by_year(results, max_place=6, lower_is_better=lower_is_better)
+
+    exp_col1, exp_col2, exp_col3 = st.columns([1, 1, 3])
+
+    with exp_col1:
+        if st.button("Preview Report", type="secondary", key="wittw_preview"):
+            st.session_state["wittw_show_preview"] = True
+
+    with exp_col2:
+        logo_b64 = get_logo_b64()
+        html_export = build_wittw_report_html(
+            event=event,
+            gender_label=gender_label,
+            championship_type=championship_type,
+            summary_df=_export_summary,
+            trend_data=_export_trends,
+            ksa_results_df=_export_ksa_results,
+            dynamic_standards=_dynamic_standards,
+            event_type=event_type,
+            lower_is_better=lower_is_better,
+            logo_b64=logo_b64,
+            standalone=True,
+        )
+        safe_event = event.replace(" ", "_").lower()
+        safe_champ = championship_type.replace(" ", "_").lower()
+        st.download_button(
+            "Download HTML",
+            html_export,
+            file_name=f"wittw_{safe_event}_{gender_label.lower()}_{safe_champ}.html",
+            mime="text/html",
+            key="wittw_dl_html",
+        )
+
+    with exp_col3:
+        st.markdown(
+            '<p style="color: #666; font-size: 0.85rem; padding-top: 0.5rem;">'
+            'Print to PDF: Open HTML &rarr; Ctrl+P</p>',
+            unsafe_allow_html=True,
+        )
+
+    # Show preview if requested
+    if st.session_state.get("wittw_show_preview", False):
+        logo_b64 = get_logo_b64()
+        preview_html = build_wittw_report_html(
+            event=event,
+            gender_label=gender_label,
+            championship_type=championship_type,
+            summary_df=_export_summary,
+            trend_data=_export_trends,
+            ksa_results_df=_export_ksa_results,
+            dynamic_standards=_dynamic_standards,
+            event_type=event_type,
+            lower_is_better=lower_is_better,
+            logo_b64=logo_b64,
+            standalone=True,
+        )
+        components.html(preview_html, height=750, scrolling=True)
+
+else:
+    st.info("Export requires championship finals data. Select an event with available results above.")
 
 # ── Footer ────────────────────────────────────────────────────────────────
 

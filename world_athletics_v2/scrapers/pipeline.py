@@ -256,7 +256,7 @@ def upload_to_azure():
 
     print(f"\nUploading to Azure Blob Storage...")
     for f in OUTPUT_DIR.glob("*.parquet"):
-        blob_name = f"athletics/v2/{f.name}"
+        blob_name = f"athletics/v2/scraped/{f.name}"
         with open(f, "rb") as data:
             container_client.upload_blob(blob_name, data, overwrite=True)
             print(f"   Uploaded: {blob_name}")
