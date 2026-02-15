@@ -38,6 +38,7 @@ jobs:
           pip install pandas httpx tqdm aiofiles
 
       - name: Run GraphQL Profile Scraper
+        continue-on-error: true
         run: |
           python scrape_ksa_profiles_graphql.py
         timeout-minutes: 30
