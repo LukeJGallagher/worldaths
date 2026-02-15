@@ -43,7 +43,10 @@ PLOTLY_LAYOUT = {
 
 # ── Theme Assets ──────────────────────────────────────────────────────
 
-THEME_DIR = Path(r"C:\Users\l.gallagher\OneDrive - Team Saudi\Documents\Performance Analysis\Theme")
+# Look for assets in repo first (works on Streamlit Cloud), then local dev path
+_ASSETS_DIR = Path(__file__).parent.parent / "assets"
+_LOCAL_THEME_DIR = Path(r"C:\Users\l.gallagher\OneDrive - Team Saudi\Documents\Performance Analysis\Theme")
+THEME_DIR = _ASSETS_DIR if _ASSETS_DIR.exists() else _LOCAL_THEME_DIR
 
 
 def _get_image_base64(image_path: Path) -> Optional[str]:
