@@ -6,6 +6,9 @@ plotly>=5.18.0
 duckdb>=0.10.0
 pyarrow>=14.0.0
 
+# Environment
+python-dotenv>=1.0.0
+
 # API Client
 httpx>=0.25.0
 
@@ -15,8 +18,8 @@ azure-storage-blob>=12.19.0
 # Scrapers
 tqdm>=4.66.0
 
-# AI Chatbot (lazy loaded)
-# openai>=1.0.0  # For OpenRouter - install when needed
+# AI Chatbot (OpenRouter)
+openai>=1.0.0
 
-# Report Generation (Phase 5)
-# reportlab>=4.0.0
+# Report Generation (PDF)
+reportlab>=4.0.0
