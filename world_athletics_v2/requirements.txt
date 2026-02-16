@@ -23,3 +23,9 @@ openai>=1.0.0
 
 # Report Generation (PDF)
 reportlab>=4.0.0
+
+# Chart export (PNG/PDF from Plotly)
+kaleido>=0.2.1
+
+# Statistical analysis
+scipy>=1.11.0
