@@ -6,6 +6,7 @@ Calculates medal, finals, semi, and heat standards from historical data.
 """
 
 from typing import Dict, List, Optional
+import re
 import pandas as pd
 import numpy as np
 
@@ -210,6 +211,160 @@ def get_standards_by_year(
     trend = trend.rename(columns={"pos_numeric": "place"})
     trend["mark"] = trend["mark"].round(3)
     trend = trend.sort_values(["year", "place"])
+
+    return trend
+
+
+def extract_round(pos_str) -> str:
+    """Classify the round from a position string.
+
+    Returns one of: 'Final', 'Semi Finals', 'Quarter Finals', 'Heats',
+    'Preliminary Round', or 'Unknown'.
+
+    Examples:
+        '1'    -> 'Final'
+        '2f1'  -> 'Final'
+        '1ce1' -> 'Final' (combined event)
+        '3sf2' -> 'Semi Finals'
+        '2qf1' -> 'Quarter Finals'
+        '1h3'  -> 'Heats'
+        '5r1'  -> 'Preliminary Round'
+    """
+    if pd.isna(pos_str):
+        return "Unknown"
+    p = str(pos_str).strip().lower()
+    if any(x in p for x in ("dns", "dnf", "dq", "nm", "nr")):
+        return "Unknown"
+    # Plain number = final
+    if re.match(r"^\d+$", p):
+        return "Final"
+    # 'f' or 'ce' suffix = final / combined event
+    if re.match(r"^\d+(f|ce)\d*$", p):
+        return "Final"
+    # 'sf' suffix = semi-final
+    if re.match(r"^\d+sf\d*$", p):
+        return "Semi Finals"
+    # 'qf' suffix = quarter-final
+    if re.match(r"^\d+qf\d*$", p):
+        return "Quarter Finals"
+    # 'q' suffix (not qf) = qualifier / preliminary
+    if re.match(r"^\d+q\d*$", p):
+        return "Preliminary Round"
+    # 'h' suffix = heat
+    if re.match(r"^\d+h\d*$", p):
+        return "Heats"
+    # 'r' suffix = round 1 / preliminary
+    if re.match(r"^\d+r\d*$", p):
+        return "Preliminary Round"
+    return "Unknown"
+
+
+# Canonical ordering from earliest to latest round
+ROUND_ORDER = [
+    "Preliminary Round",
+    "Heats",
+    "Quarter Finals",
+    "Semi Finals",
+    "Final",
+]
+
+
+def get_round_summary(
+    results_df: pd.DataFrame,
+    lower_is_better: bool = True,
+) -> pd.DataFrame:
+    """Aggregate championship results by round stage.
+
+    Args:
+        results_df: DataFrame with 'pos' and 'result_numeric' columns
+                    (should include ALL rounds, not just finals)
+        lower_is_better: True for time events
+
+    Returns:
+        DataFrame with columns: round, qualifier_type, avg_mark, fastest, slowest, n_results
+        Sorted in natural round order (Preliminary -> Heats -> ... -> Final).
+    """
+    if len(results_df) == 0:
+        return pd.DataFrame()
+
+    df = results_df.copy()
+    df["round"] = df["pos"].apply(extract_round)
+    df = df[df["round"] != "Unknown"]
+    df["result_numeric"] = pd.to_numeric(df["result_numeric"], errors="coerce")
+    df = df.dropna(subset=["result_numeric"])
+
+    if len(df) == 0:
+        return pd.DataFrame()
+
+    summary = df.groupby("round").agg(
+        avg_mark=("result_numeric", "mean"),
+        fastest=("result_numeric", "min") if lower_is_better else ("result_numeric", "max"),
+        slowest=("result_numeric", "max") if lower_is_better else ("result_numeric", "min"),
+        n_results=("result_numeric", "count"),
+    ).reset_index()
+
+    summary["avg_mark"] = summary["avg_mark"].round(3)
+    summary["fastest"] = summary["fastest"].round(3)
+    summary["slowest"] = summary["slowest"].round(3)
+
+    # Qualifier type heuristic
+    def _qualifier_type(rnd: str) -> str:
+        if rnd == "Final":
+            return "Final"
+        return "Qualifying"
+
+    summary["qualifier_type"] = summary["round"].apply(_qualifier_type)
+
+    # Sort by canonical round order
+    order_map = {r: i for i, r in enumerate(ROUND_ORDER)}
+    summary["_order"] = summary["round"].map(order_map).fillna(99)
+    summary = summary.sort_values("_order").drop(columns=["_order"])
+
+    return summary
+
+
+def get_round_trends_by_year(
+    results_df: pd.DataFrame,
+    lower_is_better: bool = True,
+) -> pd.DataFrame:
+    """Get avg/fastest/slowest marks per round per year for trend charts.
+
+    Args:
+        results_df: DataFrame with 'pos', 'result_numeric', and 'year'/'date'
+        lower_is_better: True for time events
+
+    Returns:
+        Long-format DataFrame: year, round, avg_mark, fastest, slowest
+    """
+    if len(results_df) == 0:
+        return pd.DataFrame()
+
+    df = results_df.copy()
+    df["round"] = df["pos"].apply(extract_round)
+    df = df[df["round"] != "Unknown"]
+
+    if "year" not in df.columns:
+        df["year"] = pd.to_datetime(df["date"], errors="coerce").dt.year
+    df["year"] = pd.to_numeric(df["year"], errors="coerce")
+    df = df.dropna(subset=["year"])
+    df["year"] = df["year"].astype(int)
+
+    df["result_numeric"] = pd.to_numeric(df["result_numeric"], errors="coerce")
+    df = df.dropna(subset=["result_numeric"])
+
+    if len(df) == 0:
+        return pd.DataFrame()
+
+    trend = df.groupby(["year", "round"]).agg(
+        avg_mark=("result_numeric", "mean"),
+        fastest=("result_numeric", "min") if lower_is_better else ("result_numeric", "max"),
+        slowest=("result_numeric", "max") if lower_is_better else ("result_numeric", "min"),
+    ).reset_index()
+
+    trend["avg_mark"] = trend["avg_mark"].round(3)
+    trend["fastest"] = trend["fastest"].round(3)
+    trend["slowest"] = trend["slowest"].round(3)
+    trend = trend.sort_values(["year", "round"])
 
     return trend
 

@@ -417,6 +417,94 @@ def place_distribution_chart(
     return fig
 
 
+def round_performance_faceted_chart(
+    df: pd.DataFrame,
+    title: str = "Average, Slowest and Fastest by Round and Competition Year (All Qualifiers)",
+    lower_is_better: bool = True,
+    round_order: Optional[List[str]] = None,
+) -> go.Figure:
+    """Faceted subplot chart: one subplot per round, with avg/slowest/fastest lines by year.
+
+    Args:
+        df: DataFrame from get_round_trends_by_year() with columns:
+            year, round, avg_mark, fastest, slowest
+        title: Overall chart title
+        lower_is_better: Invert Y axis for time events
+        round_order: Custom ordering of rounds for subplots
+    """
+    if round_order is None:
+        round_order = [
+            "Preliminary Round", "Heats", "Quarter Finals", "Semi Finals", "Final",
+        ]
+
+    # Only keep rounds that exist in the data
+    available_rounds = [r for r in round_order if r in df["round"].values]
+    if not available_rounds:
+        return go.Figure()
+
+    n_rounds = len(available_rounds)
+    # 2 columns layout for 2-4 rounds, single row for 1 round
+    n_cols = min(2, n_rounds)
+    n_rows = (n_rounds + n_cols - 1) // n_cols
+
+    from plotly.subplots import make_subplots
+
+    fig = make_subplots(
+        rows=n_rows, cols=n_cols,
+        subplot_titles=available_rounds,
+        shared_yaxes=True,
+        horizontal_spacing=0.08,
+        vertical_spacing=0.15,
+    )
+
+    line_defs = [
+        ("avg_mark", "Average", TEAL_LIGHT, "solid"),
+        ("slowest", "Slowest", GOLD_ACCENT, "solid"),
+        ("fastest", "Fastest", "#E91E63", "solid"),
+    ]
+
+    for idx, round_name in enumerate(available_rounds):
+        row = idx // n_cols + 1
+        col = idx % n_cols + 1
+        round_data = df[df["round"] == round_name].sort_values("year")
+
+        for metric, legend_name, color, dash in line_defs:
+            if metric not in round_data.columns:
+                continue
+            fig.add_trace(
+                go.Scatter(
+                    x=round_data["year"],
+                    y=round_data[metric],
+                    mode="lines+markers",
+                    name=legend_name,
+                    line=dict(color=color, width=2, dash=dash),
+                    marker=dict(size=5, color=color),
+                    legendgroup=legend_name,
+                    showlegend=(idx == 0),  # Only show legend once
+                ),
+                row=row, col=col,
+            )
+
+    _apply_base_layout(fig, title)
+    fig.update_layout(
+        height=300 * n_rows + 80,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
+    )
+
+    # Apply axis formatting
+    for i in range(1, n_rows * n_cols + 1):
+        suffix = "" if i == 1 else str(i)
+        fig.update_xaxes(dtick=2, row=(i - 1) // n_cols + 1, col=(i - 1) % n_cols + 1)
+        if lower_is_better:
+            fig.update_yaxes(
+                autorange="reversed",
+                row=(i - 1) // n_cols + 1,
+                col=(i - 1) % n_cols + 1,
+            )
+
+    return fig
+
+
 def wa_points_heatmap(
     df: pd.DataFrame,
     title: str = "WA Points Scoring Map",

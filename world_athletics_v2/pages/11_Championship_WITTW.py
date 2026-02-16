@@ -22,6 +22,7 @@ from components.theme import (
 )
 from components.charts import (
     championship_trends_chart, place_distribution_chart, standards_waterfall,
+    round_performance_faceted_chart,
 )
 from components.filters import event_gender_picker
 from data.connector import get_connector
@@ -30,7 +31,10 @@ from data.event_utils import (
     display_to_db,
 )
 
-from analytics.standards import get_finals_summary_by_place, get_standards_by_year
+from analytics.standards import (
+    get_finals_summary_by_place, get_standards_by_year,
+    get_round_summary, get_round_trends_by_year, ROUND_ORDER,
+)
 
 
 # ── Page Setup ────────────────────────────────────────────────────────────
@@ -698,6 +702,90 @@ else:
         f"No finals data found for {event} {gender_label} in the master database. "
         f"This event may not be in the legacy data."
     )
+
+# ── Section: Qualification Performance by Stage ──────────────────────────
+
+render_section_header(
+    "Major Championship Qualification Performance",
+    f"Performance by round stage — {event} {gender_label} — {championship_type}",
+)
+
+# Load ALL rounds (not just finals) for the selected championship
+all_rounds_results = dc.get_championship_results(
+    event=event,
+    gender=gender,
+    finals_only=False,
+    championship_type=champ_type_for_master,
+    limit=20000,
+)
+
+# Fall back to all championships if specific filter returned nothing
+if len(all_rounds_results) == 0 and champ_type_for_master:
+    all_rounds_results = dc.get_championship_results(
+        event=event,
+        gender=gender,
+        finals_only=False,
+        championship_type=None,
+        limit=20000,
+    )
+
+if len(all_rounds_results) > 0:
+    # Round summary table (left column)
+    round_summary = get_round_summary(all_rounds_results, lower_is_better=lower_is_better)
+    # Round trends by year (right column chart)
+    round_trends = get_round_trends_by_year(all_rounds_results, lower_is_better=lower_is_better)
+
+    if len(round_summary) > 0:
+        qual_col1, qual_col2 = st.columns([2, 3])
+
+        with qual_col1:
+            st.markdown(
+                f"**Qualification Type by Stage** "
+                f"<span style='color:{GRAY_BLUE}; font-size:0.85rem;'>"
+                f"({len(all_rounds_results):,} total results)</span>",
+                unsafe_allow_html=True,
+            )
+            display_round = round_summary.copy()
+            for col in ["avg_mark", "fastest", "slowest"]:
+                if col in display_round.columns:
+                    display_round[col] = display_round[col].apply(
+                        lambda v: format_mark(v, event_type)
+                    )
+
+            rename_map = {
+                "round": "Round",
+                "qualifier_type": "Qualifier Type",
+                "avg_mark": "Average",
+                "slowest": "Slowest",
+                "fastest": "Fastest",
+                "n_results": "# Results",
+            }
+            display_cols = ["round", "qualifier_type", "avg_mark", "slowest", "fastest", "n_results"]
+            available = [c for c in display_cols if c in display_round.columns]
+            st.dataframe(
+                display_round[available].rename(columns=rename_map),
+                hide_index=True,
+                height=min(250, 45 * len(display_round) + 40),
+            )
+
+        with qual_col2:
+            if len(round_trends) > 0:
+                fig_rounds = round_performance_faceted_chart(
+                    round_trends,
+                    title=f"Average, Slowest & Fastest by Round — {championship_type}",
+                    lower_is_better=lower_is_better,
+                )
+                st.plotly_chart(fig_rounds, use_container_width=True)
+            else:
+                st.info("Insufficient data for round trend charts.")
+    else:
+        st.info(
+            f"No round-level data found for {event} {gender_label}. "
+            f"Position values may not encode round information for this event."
+        )
+else:
+    st.info(f"No results available for qualification performance analysis.")
+
 
 # ── Section: KSA Championship Results (from v2 ksa_results) ──────────────
 

@@ -290,6 +290,11 @@ if df.empty:
     st.warning("No data for this filter combination.")
     st.stop()
 
+st.caption(
+    f"Analysing **{len(df)}** races across **{df['championship'].nunique()}** championships "
+    f"| {len(df[df['phase'].str.contains('Final', case=False, na=False)])} finals results"
+)
+
 
 # ── KPI Row ───────────────────────────────────────────────────────────
 
@@ -314,13 +319,13 @@ with col5:
 # ══════════════════════════════════════════════════════════════════════
 
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-    "Pacing Profiles",
-    "Split Differential",
-    "Runner Types",
-    "Tactical Positioning",
-    "Championship Trends",
-    "Sweet Spot Finder",
-    "Athlete Deep Dive",
+    "Pacing",
+    "Splits",
+    "Types",
+    "Tactics",
+    "Trends",
+    "Sweet Spot",
+    "Athlete",
 ])
 
 
