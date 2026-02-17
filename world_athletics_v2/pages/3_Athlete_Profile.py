@@ -66,7 +66,7 @@ with col_photo:
         st.image(photo_url, width=200)
         photo_shown = True
 
-    # Try local photo file as fallback
+    # Try local photo file as fallback (read as bytes for Cloud compatibility)
     if not photo_shown:
         from pathlib import Path
         aid = str(athlete.get("athlete_id", ""))
@@ -74,7 +74,7 @@ with col_photo:
         for ext in (".jpg", ".png", ".webp"):
             local_photo = photos_dir / f"{aid}{ext}"
             if local_photo.exists():
-                st.image(str(local_photo), width=200)
+                st.image(local_photo.read_bytes(), width=200)
                 photo_shown = True
                 break
 

@@ -168,9 +168,25 @@ col_photo, col_info = st.columns([1, 3])
 
 with col_photo:
     photo_url = athlete.get("photo_url", athlete.get("profile_image_url"))
+    photo_shown = False
+
     if pd.notna(photo_url) and str(photo_url) not in ("None", "nan", ""):
         st.image(photo_url, width=200)
-    else:
+        photo_shown = True
+
+    # Try local photo file as fallback (read as bytes for Cloud compatibility)
+    if not photo_shown:
+        from pathlib import Path as _Path
+        _aid = str(athlete.get("athlete_id", ""))
+        _photos_dir = _Path(__file__).parent.parent / "data" / "scraped" / "photos"
+        for _ext in (".jpg", ".png", ".webp"):
+            _local = _photos_dir / f"{_aid}{_ext}"
+            if _local.exists():
+                st.image(_local.read_bytes(), width=200)
+                photo_shown = True
+                break
+
+    if not photo_shown:
         st.markdown(f"""
         <div style="width: 200px; height: 200px; background: {TEAL_PRIMARY};
              border-radius: 50%; display: flex; align-items: center; justify-content: center;">

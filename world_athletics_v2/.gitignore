@@ -4,8 +4,7 @@
 secrets.toml
 .streamlit/secrets.toml
 
-# Large/binary scraped files (photos, competition results)
-data/scraped/photos/
+# Large/binary scraped files (competition results)
 data/scraped/comp_results_*
 data/scraped/ksa_deep_profiles.json
 
