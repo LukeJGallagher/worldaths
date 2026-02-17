@@ -388,10 +388,15 @@ with col_left:
     })
 
     display_cols = ["Rank", "Country", "IOC", "Results", "Avg Points", "Max Points", "Venues"]
-    st.dataframe(
-        top_countries[display_cols].style.background_gradient(
+    try:
+        styled = top_countries[display_cols].style.background_gradient(
             cmap="YlGn", subset=["Avg Points"]
-        ),
+        )
+    except ImportError:
+        # matplotlib not available on Streamlit Cloud
+        styled = top_countries[display_cols]
+    st.dataframe(
+        styled,
         use_container_width=True,
         hide_index=True,
         height=500,
@@ -444,10 +449,14 @@ with col_right:
         })
 
         display_venue_cols = ["Rank", "Venue", "Country", "Results", "Avg Points", "Max Points"]
-        st.dataframe(
-            venue_df[display_venue_cols].style.background_gradient(
+        try:
+            styled_v = venue_df[display_venue_cols].style.background_gradient(
                 cmap="YlGn", subset=["Avg Points"]
-            ),
+            )
+        except ImportError:
+            styled_v = venue_df[display_venue_cols]
+        st.dataframe(
+            styled_v,
             use_container_width=True,
             hide_index=True,
             height=500,
@@ -602,10 +611,14 @@ else:
         })
 
         display_ksa_cols = ["Rank", "Country", "IOC", "Results", "Avg Points", "Athletes"]
-        st.dataframe(
-            ksa_table[display_ksa_cols].style.background_gradient(
+        try:
+            styled_k = ksa_table[display_ksa_cols].style.background_gradient(
                 cmap="YlGn", subset=["Results"]
-            ),
+            )
+        except ImportError:
+            styled_k = ksa_table[display_ksa_cols]
+        st.dataframe(
+            styled_k,
             use_container_width=True,
             hide_index=True,
             height=400,
