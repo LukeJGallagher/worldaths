@@ -296,9 +296,9 @@ if len(pbs) > 0:
     elif "result" in available_cols:
         column_config["result"] = st.column_config.TextColumn("PB")
     if "result_score" in available_cols:
-        column_config["result_score"] = st.column_config.NumberColumn("WA Points", format=",.0f")
+        column_config["result_score"] = st.column_config.NumberColumn("WA Points")
     elif "resultscore" in available_cols:
-        column_config["resultscore"] = st.column_config.NumberColumn("WA Points", format=",.0f")
+        column_config["resultscore"] = st.column_config.NumberColumn("WA Points")
     if "venue" in available_cols:
         column_config["venue"] = st.column_config.TextColumn("Venue")
     if "date" in available_cols:
@@ -308,7 +308,13 @@ if len(pbs) > 0:
     if "wind" in available_cols:
         column_config["wind"] = st.column_config.TextColumn("Wind")
 
-    st.dataframe(display_pbs[available_cols], hide_index=True, column_config=column_config)
+    # Convert score columns to int for clean display
+    pb_display = display_pbs[available_cols].copy()
+    for col in ["result_score", "resultscore"]:
+        if col in pb_display.columns:
+            pb_display[col] = pd.to_numeric(pb_display[col], errors="coerce").fillna(0).astype(int)
+
+    st.dataframe(pb_display, hide_index=True, column_config=column_config)
 
     # ─ WA Points Scoring Bar Chart ("Easy Points" analysis) ─
     if _sc_col and _ev_col and len(pbs) > 1:
@@ -401,13 +407,17 @@ sbs = dc.get_ksa_athlete_season_bests(selected_name, season=current_year)
 if len(sbs) > 0:
     sb_display = ["event", "result", "resultscore", "venue", "date"]
     sb_avail = [c for c in sb_display if c in sbs.columns]
+    # Convert score column to int for clean display
+    sb_display_df = sbs[sb_avail].copy()
+    if "resultscore" in sb_display_df.columns:
+        sb_display_df["resultscore"] = pd.to_numeric(sb_display_df["resultscore"], errors="coerce").fillna(0).astype(int)
     st.dataframe(
-        sbs[sb_avail],
+        sb_display_df,
         hide_index=True,
         column_config={
             "event": st.column_config.TextColumn("Event"),
             "result": st.column_config.TextColumn("SB"),
-            "resultscore": st.column_config.NumberColumn("WA Points", format=",.0f"),
+            "resultscore": st.column_config.NumberColumn("WA Points"),
             "venue": st.column_config.TextColumn("Venue"),
             "date": st.column_config.TextColumn("Date"),
         },
@@ -478,16 +488,21 @@ if len(progression) > 0:
         progression["year"] = pd.to_numeric(progression["year"], errors="coerce").fillna(0).astype(int).astype(str)
     prog_display = ["year", "event", "best_mark", "best_score", "venue", "n_comps"]
     prog_avail = [c for c in prog_display if c in progression.columns]
+    # Convert numeric columns to int for clean display
+    prog_display_df = progression[prog_avail].copy()
+    for col in ["best_score", "n_comps"]:
+        if col in prog_display_df.columns:
+            prog_display_df[col] = pd.to_numeric(prog_display_df[col], errors="coerce").fillna(0).astype(int)
     st.dataframe(
-        progression[prog_avail],
+        prog_display_df,
         hide_index=True,
         column_config={
             "year": st.column_config.TextColumn("Year"),
             "event": st.column_config.TextColumn("Event"),
             "best_mark": st.column_config.TextColumn("Best Mark"),
-            "best_score": st.column_config.NumberColumn("WA Points", format=",.0f"),
+            "best_score": st.column_config.NumberColumn("WA Points"),
             "venue": st.column_config.TextColumn("Venue"),
-            "n_comps": st.column_config.NumberColumn("Comps", format=",.0f"),
+            "n_comps": st.column_config.NumberColumn("Comps"),
         },
     )
 
@@ -584,12 +599,18 @@ if len(results) > 0:
     if "venue" in available_cols:
         column_config["venue"] = st.column_config.TextColumn("Venue")
     if "result_score" in available_cols:
-        column_config["result_score"] = st.column_config.NumberColumn("Points", format=",.0f")
+        column_config["result_score"] = st.column_config.NumberColumn("Points")
     elif "resultscore" in available_cols:
-        column_config["resultscore"] = st.column_config.NumberColumn("Points", format=",.0f")
+        column_config["resultscore"] = st.column_config.NumberColumn("Points")
+
+    # Convert score columns to int for clean display
+    results_display = results[available_cols].copy()
+    for col in ["result_score", "resultscore"]:
+        if col in results_display.columns:
+            results_display[col] = pd.to_numeric(results_display[col], errors="coerce").fillna(0).astype(int)
 
     st.dataframe(
-        results[available_cols],
+        results_display,
         hide_index=True,
         column_config=column_config,
         height=400,

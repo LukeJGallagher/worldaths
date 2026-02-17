@@ -91,15 +91,21 @@ if len(ksa) > 0:
     column_config = {
         "full_name": st.column_config.TextColumn("Athlete", width="medium"),
         "primary_event": st.column_config.TextColumn("Event"),
-        "best_world_rank": st.column_config.NumberColumn("World Rank", format=",.0f"),
+        "best_world_rank": st.column_config.NumberColumn("World Rank"),
     }
     if "best_ranking_score" in ksa.columns:
-        column_config["best_ranking_score"] = st.column_config.NumberColumn("Score", format=",.0f")
+        column_config["best_ranking_score"] = st.column_config.NumberColumn("Score")
     elif "best_score" in ksa.columns:
-        column_config["best_score"] = st.column_config.NumberColumn("Score", format=",.0f")
+        column_config["best_score"] = st.column_config.NumberColumn("Score")
+
+    # Convert numeric columns to int for clean display
+    ksa_display = ksa[available_cols].head(20).copy()
+    for col in ["best_world_rank", "best_ranking_score", "best_score"]:
+        if col in ksa_display.columns:
+            ksa_display[col] = pd.to_numeric(ksa_display[col], errors="coerce").fillna(0).astype(int)
 
     st.dataframe(
-        ksa[available_cols].head(20),
+        ksa_display,
         hide_index=True,
         column_config=column_config,
     )

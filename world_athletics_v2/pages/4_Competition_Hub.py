@@ -379,13 +379,19 @@ with tabs[3]:
             )
             cat_counts = cat_counts.sort_values("Place Points", ascending=False)
 
+            # Convert numeric columns to int for clean display
+            cat_display = cat_counts[["Category", "Full Name", "Place Points", "Count"]].copy()
+            for col in ["Place Points", "Count"]:
+                if col in cat_display.columns:
+                    cat_display[col] = pd.to_numeric(cat_display[col], errors="coerce").fillna(0).astype(int)
+
             st.dataframe(
-                cat_counts[["Category", "Full Name", "Place Points", "Count"]],
+                cat_display,
                 hide_index=True,
                 column_config={
                     "Category": st.column_config.TextColumn("Code"),
                     "Full Name": st.column_config.TextColumn("Category Name", width="large"),
-                    "Place Points": st.column_config.NumberColumn("Place Pts", format=",.0f"),
+                    "Place Points": st.column_config.NumberColumn("Place Pts"),
                     "Count": st.column_config.NumberColumn("Competitions"),
                 },
             )
@@ -555,12 +561,14 @@ A 10.15s 100m at Diamond League scores MORE than the same 10.15s at a Bronze mee
                                     "Place": str(row.get(place_col, "-")) if place_col else "-",
                                 })
 
+                            scored_display_df = pd.DataFrame(display_data)
+                            # WA Points already cast to int in display_data construction
                             st.dataframe(
-                                pd.DataFrame(display_data),
+                                scored_display_df,
                                 hide_index=True,
                                 column_config={
                                     "WA Points": st.column_config.NumberColumn(
-                                        "WA Points", format=",.0f",
+                                        "WA Points",
                                     ),
                                     "Competition": st.column_config.TextColumn("Competition", width="large"),
                                 },
@@ -674,8 +682,13 @@ A 10.15s 100m at Diamond League scores MORE than the same 10.15s at a Bronze mee
                     display_cols.insert(2, area_col)
                 available_cols = [c for c in display_cols if c in future.columns]
 
+                # Convert numeric columns to int for clean display
+                future_display = future[available_cols].head(50).copy()
+                if "est_points" in future_display.columns:
+                    future_display["est_points"] = pd.to_numeric(future_display["est_points"], errors="coerce").fillna(0).astype(int)
+
                 st.dataframe(
-                    future[available_cols].head(50),
+                    future_display,
                     hide_index=True,
                     column_config={
                         "name": st.column_config.TextColumn("Competition", width="large"),
@@ -684,7 +697,7 @@ A 10.15s 100m at Diamond League scores MORE than the same 10.15s at a Bronze mee
                         "start_date": st.column_config.TextColumn("Date"),
                         "ranking_category": st.column_config.TextColumn("Category"),
                         "est_points": st.column_config.NumberColumn(
-                            "Est. Points", format=",.0f",
+                            "Est. Points",
                         ),
                     },
                     height=600,

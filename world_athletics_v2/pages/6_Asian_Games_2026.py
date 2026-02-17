@@ -461,12 +461,17 @@ with tabs[1]:
                 display_cols = ["Athlete", "Event", "PB", "Gold Target", "Gap to Gold",
                                "Medal Target", "Gap to Medal", "Status"]
 
+            # Convert numeric columns to int for clean display
+            ag_display = df_ready[display_cols].copy()
+            if "# Comps" in ag_display.columns:
+                ag_display["# Comps"] = pd.to_numeric(ag_display["# Comps"], errors="coerce").fillna(0).astype(int)
+
             st.dataframe(
-                df_ready[display_cols],
+                ag_display,
                 hide_index=True,
                 column_config={
                     "Athlete": st.column_config.TextColumn("Athlete", width="medium"),
-                    "# Comps": st.column_config.NumberColumn("Comps", format=",.0f"),
+                    "# Comps": st.column_config.NumberColumn("Comps"),
                     "Status": st.column_config.TextColumn("Readiness"),
                 },
                 height=600,
@@ -739,7 +744,7 @@ with tabs[3]:
             "best5_avg": st.column_config.TextColumn("Best 5 Avg"),
             "latest_mark": st.column_config.TextColumn("Latest"),
             "latest_date": st.column_config.TextColumn("Last Date"),
-            "performances_count": st.column_config.NumberColumn("# Perfs", format=",.0f"),
+            "performances_count": st.column_config.NumberColumn("# Perfs"),
         }
 
         # Summary metrics
@@ -755,11 +760,11 @@ with tabs[3]:
 
         rivals = rivals.copy()
 
-        # Ensure performances_count is numeric (avoids literal "d" format display)
+        # Ensure performances_count is numeric int (avoids float display like 5.0)
         if "performances_count" in rivals.columns:
             rivals["performances_count"] = pd.to_numeric(
                 rivals["performances_count"], errors="coerce"
-            )
+            ).fillna(0).astype(int)
 
         # Sort by PB (best performance) instead of unreliable world_rank
         if "pb_mark" in rivals.columns:

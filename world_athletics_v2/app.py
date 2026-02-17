@@ -8,6 +8,7 @@ Run: streamlit run world_athletics_v2/app.py
 """
 
 import streamlit as st
+import pandas as pd
 from dotenv import load_dotenv
 from pathlib import Path
 
@@ -115,13 +116,13 @@ if ksa_count > 0:
         column_config = {
             "full_name": st.column_config.TextColumn("Athlete", width="medium"),
             "primary_event": st.column_config.TextColumn("Event"),
-            "best_world_rank": st.column_config.NumberColumn("World Rank", format=",.0f"),
+            "best_world_rank": st.column_config.NumberColumn("World Rank"),
         }
         # Add score column config based on which exists
         if "best_ranking_score" in df_athletes.columns:
-            column_config["best_ranking_score"] = st.column_config.NumberColumn("Score", format=",.0f")
+            column_config["best_ranking_score"] = st.column_config.NumberColumn("Score")
         elif "best_score" in df_athletes.columns:
-            column_config["best_score"] = st.column_config.NumberColumn("Score", format=",.0f")
+            column_config["best_score"] = st.column_config.NumberColumn("Score")
 
         if "gold_medals" in df_athletes.columns:
             column_config["gold_medals"] = st.column_config.NumberColumn("G")
@@ -130,8 +131,14 @@ if ksa_count > 0:
         if "bronze_medals" in df_athletes.columns:
             column_config["bronze_medals"] = st.column_config.NumberColumn("B")
 
+        # Convert numeric columns to int for clean display
+        df_display = df_athletes[available_cols].head(10).copy()
+        for col in ["best_world_rank", "best_ranking_score", "best_score"]:
+            if col in df_display.columns:
+                df_display[col] = pd.to_numeric(df_display[col], errors="coerce").fillna(0).astype(int)
+
         st.dataframe(
-            df_athletes[available_cols].head(10),
+            df_display,
             hide_index=True,
             column_config=column_config,
         )

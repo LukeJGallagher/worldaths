@@ -232,13 +232,16 @@ with tabs[0]:
             display_cols.append(res_mark_col)
             col_cfg[res_mark_col] = st.column_config.TextColumn("Mark")
         display_cols.append(res_sc_col)
-        col_cfg[res_sc_col] = st.column_config.NumberColumn("WA Points", format=",.0f")
+        col_cfg[res_sc_col] = st.column_config.NumberColumn("WA Points")
         for c in ["competition", "venue", "date"]:
             if c in top5_df.columns:
                 display_cols.append(c)
                 col_cfg[c] = st.column_config.TextColumn(c.title())
 
         avail = [c for c in display_cols if c in top5_df.columns]
+        # Convert score column to int for clean display
+        if res_sc_col in top5_df.columns:
+            top5_df[res_sc_col] = pd.to_numeric(top5_df[res_sc_col], errors="coerce").fillna(0).astype(int)
         st.dataframe(top5_df[avail], hide_index=True, column_config=col_cfg)
 
         # Chart
@@ -342,8 +345,14 @@ with tabs[1]:
                 table_cols.insert(3, "area")
             avail = [c for c in table_cols if c in ranked.columns]
 
+            # Convert numeric columns to int for clean display
+            ranked_display = ranked[avail].head(50).copy()
+            for col in ["place_pts", "est_total", "est_gain", "days_until"]:
+                if col in ranked_display.columns:
+                    ranked_display[col] = pd.to_numeric(ranked_display[col], errors="coerce").fillna(0).astype(int)
+
             st.dataframe(
-                ranked[avail].head(50),
+                ranked_display,
                 hide_index=True,
                 column_config={
                     "name": st.column_config.TextColumn("Competition", width="large"),
@@ -351,10 +360,10 @@ with tabs[1]:
                     "area": st.column_config.TextColumn("Region"),
                     "start_date": st.column_config.TextColumn("Date"),
                     "ranking_category": st.column_config.TextColumn("Cat"),
-                    "place_pts": st.column_config.NumberColumn("Place Pts", format=",.0f"),
-                    "est_total": st.column_config.NumberColumn("Est. Total", format=",.0f"),
-                    "est_gain": st.column_config.NumberColumn("Est. Gain", format=",.0f"),
-                    "days_until": st.column_config.NumberColumn("Days", format=",.0f"),
+                    "place_pts": st.column_config.NumberColumn("Place Pts"),
+                    "est_total": st.column_config.NumberColumn("Est. Total"),
+                    "est_gain": st.column_config.NumberColumn("Est. Gain"),
+                    "days_until": st.column_config.NumberColumn("Days"),
                 },
                 height=600,
             )
@@ -495,12 +504,16 @@ with tabs[2]:
             "Improvement": f"+{gain['improvement']:.0f}" if gain["improvement"] > 0 else "—",
         })
     comp_df = pd.DataFrame(comp_rows)
+    # Convert numeric columns to int for clean display
+    for col in ["Place Pts", "Est. Total", "New Avg"]:
+        if col in comp_df.columns:
+            comp_df[col] = pd.to_numeric(comp_df[col], errors="coerce").fillna(0).astype(int)
     st.dataframe(comp_df, hide_index=True, column_config={
         "Category": st.column_config.TextColumn("Category", width="large"),
-        "Place Pts": st.column_config.NumberColumn("Place Pts", format=",.0f"),
-        "Est. Total": st.column_config.NumberColumn("Est. Total", format=",.0f"),
+        "Place Pts": st.column_config.NumberColumn("Place Pts"),
+        "Est. Total": st.column_config.NumberColumn("Est. Total"),
         "Would Displace": st.column_config.TextColumn("Displaces #5?"),
-        "New Avg": st.column_config.NumberColumn("New Avg", format=",.0f"),
+        "New Avg": st.column_config.NumberColumn("New Avg"),
         "Improvement": st.column_config.TextColumn("Improvement"),
     })
 
@@ -550,8 +563,14 @@ with tabs[3]:
             display.insert(3, "area")
         avail = [c for c in display if c in tl_df.columns]
 
+        # Convert numeric columns to int for clean display
+        tl_display = tl_df[avail].copy()
+        for col in ["Place Pts", "Est. Total"]:
+            if col in tl_display.columns:
+                tl_display[col] = pd.to_numeric(tl_display[col], errors="coerce").fillna(0).astype(int)
+
         st.dataframe(
-            tl_df[avail],
+            tl_display,
             hide_index=True,
             column_config={
                 "name": st.column_config.TextColumn("Competition", width="large"),
@@ -559,8 +578,8 @@ with tabs[3]:
                 "area": st.column_config.TextColumn("Region"),
                 "start_date": st.column_config.TextColumn("Date"),
                 "Category": st.column_config.TextColumn("Category"),
-                "Place Pts": st.column_config.NumberColumn("Place Pts", format=",.0f"),
-                "Est. Total": st.column_config.NumberColumn("Est. Total", format=",.0f"),
+                "Place Pts": st.column_config.NumberColumn("Place Pts"),
+                "Est. Total": st.column_config.NumberColumn("Est. Total"),
             },
             height=600,
         )

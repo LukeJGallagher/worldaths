@@ -373,6 +373,10 @@ if len(rivals_df) > 0:
             return [f"background-color: rgba(35, 80, 50, 0.15); font-weight: bold"] * len(row)
         return [""] * len(row)
 
+    # Convert numeric columns to int for clean display
+    if "# Perfs" in display_df.columns:
+        display_df["# Perfs"] = pd.to_numeric(display_df["# Perfs"], errors="coerce").fillna(0).astype(int)
+
     st.dataframe(
         display_df.style.apply(highlight_ksa, axis=1),
         hide_index=True,
@@ -382,7 +386,7 @@ if len(rivals_df) > 0:
             "Nat": st.column_config.TextColumn("Nat", width="small"),
             "PB": st.column_config.TextColumn("PB"),
             "SB": st.column_config.TextColumn("SB"),
-            "# Perfs": st.column_config.NumberColumn("# Perfs", format=",.0f"),
+            "# Perfs": st.column_config.NumberColumn("# Perfs"),
             "Latest Date": st.column_config.TextColumn("Latest Date"),
         },
         height=min(500, 35 * len(display_df) + 38),
