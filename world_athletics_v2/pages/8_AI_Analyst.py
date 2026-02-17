@@ -91,7 +91,11 @@ DEFAULT_MODEL = 'google/gemini-2.0-flash-001'
 
 
 def _get_api_key() -> Optional[str]:
-    """Get OpenRouter API key from env or Streamlit secrets."""
+    """Get OpenRouter API key from env or Streamlit secrets.
+
+    Tries primary key first, then falls back to OPENROUTER_API_KEY_2.
+    """
+    # Try primary key
     key = os.getenv('OPENROUTER_API_KEY')
     if not key:
         try:
@@ -101,6 +105,15 @@ def _get_api_key() -> Optional[str]:
                     key = st.secrets.openrouter.get('OPENROUTER_API_KEY')
         except Exception:
             pass
+    # Fallback to secondary key
+    if not key:
+        key = os.getenv('OPENROUTER_API_KEY_2')
+        if not key:
+            try:
+                if hasattr(st, 'secrets'):
+                    key = st.secrets.get('OPENROUTER_API_KEY_2')
+            except Exception:
+                pass
     return key
 
 
@@ -573,14 +586,38 @@ class ContextBuilder:
 
 # ── Chat Client ──────────────────────────────────────────────────────
 
+def _get_backup_api_key() -> Optional[str]:
+    """Get backup OpenRouter API key."""
+    key = os.getenv('OPENROUTER_API_KEY_2')
+    if not key:
+        try:
+            if hasattr(st, 'secrets'):
+                key = st.secrets.get('OPENROUTER_API_KEY_2')
+        except Exception:
+            pass
+    return key
+
+
 class ChatClient:
     """OpenRouter chat client with athletics context."""
 
     def __init__(self, api_key: str, model: str = DEFAULT_MODEL):
         from openai import OpenAI
         self.client = OpenAI(base_url=OPENROUTER_BASE_URL, api_key=api_key)
+        self._OpenAI = OpenAI
+        self._api_key = api_key
         self.model = model
         self.context_builder = ContextBuilder()
+
+    def _try_backup_key(self):
+        """Switch to backup API key on auth failure."""
+        backup = _get_backup_api_key()
+        if backup and backup != self._api_key:
+            self.client = self._OpenAI(base_url=OPENROUTER_BASE_URL, api_key=backup)
+            self._api_key = backup
+            logger.info("Switched to backup OpenRouter API key")
+            return True
+        return False
 
     def chat(self, message: str, history: List[Dict] = None) -> Tuple[str, str]:
         """Send a message and get a response with sources."""
@@ -617,6 +654,25 @@ class ChatClient:
             return answer, sources_text
 
         except Exception as e:
+            # Retry with backup key on auth failure (401)
+            if "401" in str(e) and self._try_backup_key():
+                try:
+                    response = self.client.chat.completions.create(
+                        model=self.model, messages=messages,
+                        temperature=0.3, max_tokens=2000, top_p=0.9,
+                        extra_headers={
+                            "HTTP-Referer": "https://team-saudi-athletics.streamlit.app",
+                            "X-Title": "Team Saudi Athletics Analyst"
+                        }
+                    )
+                    answer = response.choices[0].message.content.strip()
+                    sources_text = ""
+                    if sources:
+                        sources_text = "**Sources:**\n" + "\n".join(f"- {s}" for s in sources)
+                    return answer, sources_text
+                except Exception as e2:
+                    logger.error(f"Backup key also failed: {e2}")
+                    return f"Error: {str(e2)}", ""
             logger.error(f"OpenRouter API error: {e}")
             return f"Error: {str(e)}", ""
 
@@ -665,6 +721,23 @@ class ChatClient:
             return answer, sources_text
 
         except Exception as e:
+            # Retry with backup key on auth failure (401)
+            if "401" in str(e) and self._try_backup_key():
+                try:
+                    response = self.client.chat.completions.create(
+                        model=self.model, messages=messages,
+                        temperature=0.3, max_tokens=2000, top_p=0.9,
+                        extra_headers={
+                            "HTTP-Referer": "https://team-saudi-athletics.streamlit.app",
+                            "X-Title": "Team Saudi Athletics Analyst"
+                        }
+                    )
+                    answer = response.choices[0].message.content.strip()
+                    sources_text = "**Sources:**\n" + "\n".join(f"- {s}" for s in sources)
+                    return answer, sources_text
+                except Exception as e2:
+                    logger.error(f"Backup key also failed: {e2}")
+                    return f"Error: {str(e2)}", ""
             logger.error(f"OpenRouter API error: {e}")
             return f"Error: {str(e)}", ""
 

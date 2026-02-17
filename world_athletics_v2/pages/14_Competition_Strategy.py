@@ -60,7 +60,13 @@ if len(df_athletes) == 0:
 col_sel1, col_sel2 = st.columns([2, 1])
 with col_sel1:
     athlete_names = df_athletes["full_name"].tolist()
-    selected_name = st.selectbox("Select Athlete", athlete_names, key="cs_athlete")
+    # Default to Sami BAKHEET if available
+    default_ath_idx = 0
+    for _i, _n in enumerate(athlete_names):
+        if "Sami BAKHEET" in _n:
+            default_ath_idx = _i
+            break
+    selected_name = st.selectbox("Select Athlete", athlete_names, index=default_ath_idx, key="cs_athlete")
 with col_sel2:
     pbs = dc.get_ksa_athlete_pbs(selected_name)
     ev_col = "discipline" if "discipline" in pbs.columns else "event" if "event" in pbs.columns else None
@@ -69,12 +75,19 @@ with col_sel2:
 
     if ev_col and len(pbs) > 0:
         events = sorted(pbs[ev_col].dropna().unique().tolist())
-        # Default to primary event
+        # Default to Long Jump if available, else primary event
         athlete_row = df_athletes[df_athletes["full_name"] == selected_name].iloc[0]
-        primary = athlete_row.get("primary_event", "")
         default_idx = 0
-        if _safe(primary) and str(primary) in events:
-            default_idx = events.index(str(primary))
+        # Try Long Jump first (demo default)
+        for _ev_name in events:
+            if "Long Jump" in _ev_name:
+                default_idx = events.index(_ev_name)
+                break
+        else:
+            # Fall back to primary event
+            primary = athlete_row.get("primary_event", "")
+            if _safe(primary) and str(primary) in events:
+                default_idx = events.index(str(primary))
         selected_event = st.selectbox("Event", events, index=default_idx, key="cs_event")
     else:
         st.info("No PB data for this athlete.")
