@@ -91,7 +91,7 @@ if len(ksa) > 0:
     column_config = {
         "full_name": st.column_config.TextColumn("Athlete", width="medium"),
         "primary_event": st.column_config.TextColumn("Event"),
-        "best_world_rank": st.column_config.NumberColumn("World Rank", format=".0f"),
+        "best_world_rank": st.column_config.NumberColumn("World Rank", format=",.0f"),
     }
     if "best_ranking_score" in ksa.columns:
         column_config["best_ranking_score"] = st.column_config.NumberColumn("Score", format=",.0f")

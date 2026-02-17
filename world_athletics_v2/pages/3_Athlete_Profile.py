@@ -487,7 +487,7 @@ if len(progression) > 0:
             "best_mark": st.column_config.TextColumn("Best Mark"),
             "best_score": st.column_config.NumberColumn("WA Points", format=",.0f"),
             "venue": st.column_config.TextColumn("Venue"),
-            "n_comps": st.column_config.NumberColumn("Comps", format=".0f"),
+            "n_comps": st.column_config.NumberColumn("Comps", format=",.0f"),
         },
     )
 

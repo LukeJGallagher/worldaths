@@ -115,7 +115,7 @@ if ksa_count > 0:
         column_config = {
             "full_name": st.column_config.TextColumn("Athlete", width="medium"),
             "primary_event": st.column_config.TextColumn("Event"),
-            "best_world_rank": st.column_config.NumberColumn("World Rank", format=".0f"),
+            "best_world_rank": st.column_config.NumberColumn("World Rank", format=",.0f"),
         }
         # Add score column config based on which exists
         if "best_ranking_score" in df_athletes.columns:

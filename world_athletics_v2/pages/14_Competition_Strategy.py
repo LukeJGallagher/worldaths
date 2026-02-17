@@ -351,10 +351,10 @@ with tabs[1]:
                     "area": st.column_config.TextColumn("Region"),
                     "start_date": st.column_config.TextColumn("Date"),
                     "ranking_category": st.column_config.TextColumn("Cat"),
-                    "place_pts": st.column_config.NumberColumn("Place Pts", format=".0f"),
+                    "place_pts": st.column_config.NumberColumn("Place Pts", format=",.0f"),
                     "est_total": st.column_config.NumberColumn("Est. Total", format=",.0f"),
-                    "est_gain": st.column_config.NumberColumn("Est. Gain", format=".0f"),
-                    "days_until": st.column_config.NumberColumn("Days", format=".0f"),
+                    "est_gain": st.column_config.NumberColumn("Est. Gain", format=",.0f"),
+                    "days_until": st.column_config.NumberColumn("Days", format=",.0f"),
                 },
                 height=600,
             )
@@ -497,7 +497,7 @@ with tabs[2]:
     comp_df = pd.DataFrame(comp_rows)
     st.dataframe(comp_df, hide_index=True, column_config={
         "Category": st.column_config.TextColumn("Category", width="large"),
-        "Place Pts": st.column_config.NumberColumn("Place Pts", format=".0f"),
+        "Place Pts": st.column_config.NumberColumn("Place Pts", format=",.0f"),
         "Est. Total": st.column_config.NumberColumn("Est. Total", format=",.0f"),
         "Would Displace": st.column_config.TextColumn("Displaces #5?"),
         "New Avg": st.column_config.NumberColumn("New Avg", format=",.0f"),
@@ -559,7 +559,7 @@ with tabs[3]:
                 "area": st.column_config.TextColumn("Region"),
                 "start_date": st.column_config.TextColumn("Date"),
                 "Category": st.column_config.TextColumn("Category"),
-                "Place Pts": st.column_config.NumberColumn("Place Pts", format=".0f"),
+                "Place Pts": st.column_config.NumberColumn("Place Pts", format=",.0f"),
                 "Est. Total": st.column_config.NumberColumn("Est. Total", format=",.0f"),
             },
             height=600,

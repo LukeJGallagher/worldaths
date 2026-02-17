@@ -385,7 +385,7 @@ with tabs[3]:
                 column_config={
                     "Category": st.column_config.TextColumn("Code"),
                     "Full Name": st.column_config.TextColumn("Category Name", width="large"),
-                    "Place Points": st.column_config.NumberColumn("Place Pts", format=".0f"),
+                    "Place Points": st.column_config.NumberColumn("Place Pts", format=",.0f"),
                     "Count": st.column_config.NumberColumn("Competitions"),
                 },
             )
@@ -684,7 +684,7 @@ A 10.15s 100m at Diamond League scores MORE than the same 10.15s at a Bronze mee
                         "start_date": st.column_config.TextColumn("Date"),
                         "ranking_category": st.column_config.TextColumn("Category"),
                         "est_points": st.column_config.NumberColumn(
-                            "Est. Points", format=".0f",
+                            "Est. Points", format=",.0f",
                         ),
                     },
                     height=600,
