@@ -136,6 +136,8 @@ def build_wittw_report_html(
     lower_is_better: bool,
     logo_b64: Optional[str] = None,
     standalone: bool = False,
+    round_summary_df: Optional[pd.DataFrame] = None,
+    round_trends_df: Optional[pd.DataFrame] = None,
 ) -> str:
     """Build standalone HTML report for Championship WITTW analysis.
 
@@ -315,6 +317,114 @@ def build_wittw_report_html(
             </div>
         </div>"""
 
+    # ── Qualification Performance by Stage section ──
+    qualification_section_html = ""
+    if round_summary_df is not None and not round_summary_df.empty:
+        # Build round summary table rows
+        round_rows_html = ""
+        for idx, (_, row) in enumerate(round_summary_df.iterrows()):
+            rnd = str(row.get("round", ""))
+            q_type = str(row.get("qualifier_type", ""))
+            avg = format_mark(row.get("avg_mark"), event_type)
+            slowest = format_mark(row.get("slowest"), event_type)
+            fastest = format_mark(row.get("fastest"), event_type)
+            n = int(row.get("n_results", 0))
+            row_bg = "background: rgba(255,255,255,0.05);" if idx % 2 == 0 else ""
+            round_rows_html += (
+                f'<tr style="{row_bg}">'
+                f'<td style="padding: 5px 10px; color: white; font-size: 0.82rem; font-weight: 600;">{rnd}</td>'
+                f'<td style="padding: 5px 10px; color: rgba(255,255,255,0.8); font-size: 0.82rem;">{q_type}</td>'
+                f'<td style="padding: 5px 10px; color: white; font-size: 0.82rem; text-align: center;">{avg}</td>'
+                f'<td style="padding: 5px 10px; color: white; font-size: 0.82rem; text-align: center;">{slowest}</td>'
+                f'<td style="padding: 5px 10px; color: white; font-size: 0.82rem; text-align: center;">{fastest}</td>'
+                f'<td style="padding: 5px 10px; color: rgba(255,255,255,0.7); font-size: 0.82rem; text-align: center;">{n}</td>'
+                f'</tr>'
+            )
+
+        # Build round trends chart
+        round_chart_html = ""
+        if round_trends_df is not None and not round_trends_df.empty:
+            fig_rounds = round_performance_faceted_chart(
+                round_trends_df,
+                title=f"Avg, Slowest & Fastest by Round — {championship_type}",
+                lower_is_better=lower_is_better,
+            )
+            fig_rounds.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(255,255,255,0.06)",
+                font=dict(color="white"),
+                title=dict(font=dict(color="white")),
+                legend=dict(font=dict(color="white")),
+                height=400,
+            )
+            fig_rounds.update_xaxes(
+                gridcolor="rgba(255,255,255,0.1)",
+                tickfont=dict(color="rgba(255,255,255,0.8)"),
+                title_font=dict(color="rgba(255,255,255,0.8)"),
+            )
+            fig_rounds.update_yaxes(
+                gridcolor="rgba(255,255,255,0.1)",
+                tickfont=dict(color="rgba(255,255,255,0.8)"),
+                title_font=dict(color="rgba(255,255,255,0.8)"),
+            )
+            # Subplot title colors
+            for ann in fig_rounds.layout.annotations:
+                ann.font.color = "white"
+
+            chart_b64 = _chart_to_b64(fig_rounds)
+            if chart_b64:
+                round_chart_html = (
+                    f'<img src="data:image/png;base64,{chart_b64}" '
+                    f'style="width: 100%; border-radius: 8px;">'
+                )
+            else:
+                snippet = _chart_to_html_snippet(fig_rounds)
+                if snippet:
+                    round_chart_html = f'<div style="border-radius: 8px; overflow: hidden;">{snippet}</div>'
+
+        qualification_section_html = f"""
+        <div style="margin-top: 1.5rem;">
+            <div style="border-bottom: 2px solid {GOLD_ACCENT}; margin-bottom: 0.8rem; padding-bottom: 0.3rem;">
+                <h3 style="color: white; margin: 0; font-size: 1.1rem;">Qualification Performance by Stage</h3>
+            </div>
+
+            <div style="display: flex; gap: 1.5rem; align-items: flex-start;">
+                <!-- LEFT: Round Summary Table -->
+                <div style="width: 40%; min-width: 280px; flex-shrink: 0;">
+                    <div style="background: rgba(255,255,255,0.08); border-radius: 8px; padding: 0.7rem;
+                         border: 1px solid rgba(255,255,255,0.12);">
+                        <h4 style="color: {GOLD_ACCENT}; margin: 0 0 0.5rem 0; font-size: 0.9rem; font-weight: 600;">
+                            Performance by Round
+                        </h4>
+                        <table style="width: 100%; border-collapse: collapse;">
+                            <thead>
+                                <tr style="background: rgba(255,255,255,0.1); border-bottom: 2px solid rgba(255,255,255,0.2);">
+                                    <th style="padding: 5px 8px; color: rgba(255,255,255,0.9); font-size: 0.72rem; text-align: left;">Round</th>
+                                    <th style="padding: 5px 8px; color: rgba(255,255,255,0.9); font-size: 0.72rem; text-align: left;">Type</th>
+                                    <th style="padding: 5px 8px; color: rgba(255,255,255,0.9); font-size: 0.72rem; text-align: center;">Avg</th>
+                                    <th style="padding: 5px 8px; color: rgba(255,255,255,0.9); font-size: 0.72rem; text-align: center;">Slowest</th>
+                                    <th style="padding: 5px 8px; color: rgba(255,255,255,0.9); font-size: 0.72rem; text-align: center;">Fastest</th>
+                                    <th style="padding: 5px 8px; color: rgba(255,255,255,0.9); font-size: 0.72rem; text-align: center;">#</th>
+                                </tr>
+                            </thead>
+                            <tbody>{round_rows_html}</tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- RIGHT: Round Trends Chart -->
+                <div style="flex: 1;">
+                    <div style="background: rgba(255,255,255,0.08); border-radius: 8px; padding: 0.7rem;
+                         border: 1px solid rgba(255,255,255,0.12);">
+                        <h4 style="color: {GOLD_ACCENT}; margin: 0 0 0.5rem 0; font-size: 0.9rem; font-weight: 600;">
+                            Round Trends by Year
+                        </h4>
+                        {round_chart_html if round_chart_html else '<p style="color: rgba(255,255,255,0.5); text-align: center; padding: 2rem;">Insufficient data for round trends chart</p>'}
+                    </div>
+                </div>
+            </div>
+        </div>"""
+
     # ── Build full HTML ──
     standalone_head = (
         '<!DOCTYPE html>\n<html lang="en"><head><meta charset="utf-8">\n'
@@ -391,6 +501,9 @@ def build_wittw_report_html(
 
     <!-- ═══ KSA RESULTS (optional) ═══ -->
     {ksa_section_html}
+
+    <!-- ═══ QUALIFICATION PERFORMANCE (optional) ═══ -->
+    {qualification_section_html}
 
     <!-- ═══ FOOTER ═══ -->
     <div style="margin-top: 1rem; padding-top: 0.5rem; border-top: 1px solid rgba(255,255,255,0.1);
@@ -718,6 +831,10 @@ else:
 
 # ── Section: Qualification Performance by Stage ──────────────────────────
 
+# Initialize for export section
+_export_round_summary = pd.DataFrame()
+_export_round_trends = pd.DataFrame()
+
 render_section_header(
     "Major Championship Qualification Performance",
     f"Performance by round stage — {event} {gender_label} — {championship_type}",
@@ -747,6 +864,9 @@ if len(all_rounds_results) > 0:
     round_summary = get_round_summary(all_rounds_results, lower_is_better=lower_is_better)
     # Round trends by year (right column chart)
     round_trends = get_round_trends_by_year(all_rounds_results, lower_is_better=lower_is_better)
+    # Capture for export
+    _export_round_summary = round_summary
+    _export_round_trends = round_trends
 
     if len(round_summary) > 0:
         qual_col1, qual_col2 = st.columns([2, 3])
@@ -985,6 +1105,8 @@ if len(results) > 0 and _dynamic_standards:
             lower_is_better=lower_is_better,
             logo_b64=logo_b64,
             standalone=True,
+            round_summary_df=_export_round_summary if not _export_round_summary.empty else None,
+            round_trends_df=_export_round_trends if not _export_round_trends.empty else None,
         )
         safe_event = event.replace(" ", "_").lower()
         safe_champ = championship_type.replace(" ", "_").lower()
@@ -1018,6 +1140,8 @@ if len(results) > 0 and _dynamic_standards:
             lower_is_better=lower_is_better,
             logo_b64=logo_b64,
             standalone=True,
+            round_summary_df=_export_round_summary if not _export_round_summary.empty else None,
+            round_trends_df=_export_round_trends if not _export_round_trends.empty else None,
         )
         components.html(preview_html, height=750, scrolling=True)
 

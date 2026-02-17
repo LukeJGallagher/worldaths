@@ -305,7 +305,7 @@ if len(rivals_df) > 0:
                 "Nat": f"{flag} {nat}",
                 "PB": _fmt_mark(row.get("pb_mark")) if _safe(row.get("pb_mark")) else (_fmt_mark(best_num) if _safe(best_num) else "-"),
                 "SB": _fmt_mark(best_num) if _safe(best_num) else "-",
-                "# Perfs": int(row.get("performances_count", 0)) if _safe(row.get("performances_count")) else "",
+                "# Perfs": int(row.get("performances_count", 0)) if _safe(row.get("performances_count")) else None,
                 "Latest Date": str(row.get("latest_date", ""))[:10] if _safe(row.get("latest_date")) else "-",
             }
         else:
@@ -322,7 +322,7 @@ if len(rivals_df) > 0:
                 "Nat": f"{flag} {nat}",
                 "PB": str(pb_val) if _safe(pb_val) else "-",
                 "SB": str(sb_val) if _safe(sb_val) else "-",
-                "# Perfs": int(row.get("performances_count", 0)) if _safe(row.get("performances_count")) else "",
+                "# Perfs": int(row.get("performances_count", 0)) if _safe(row.get("performances_count")) else None,
                 "Latest Date": str(latest_date)[:11] if _safe(latest_date) else "-",
             }
 

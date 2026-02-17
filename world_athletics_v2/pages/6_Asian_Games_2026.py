@@ -753,9 +753,16 @@ with tabs[3]:
             events_count = rivals["event"].nunique() if "event" in rivals.columns else 0
             render_metric_card("Events", str(events_count), "neutral")
 
+        rivals = rivals.copy()
+
+        # Ensure performances_count is numeric (avoids literal "d" format display)
+        if "performances_count" in rivals.columns:
+            rivals["performances_count"] = pd.to_numeric(
+                rivals["performances_count"], errors="coerce"
+            )
+
         # Sort by PB (best performance) instead of unreliable world_rank
         if "pb_mark" in rivals.columns:
-            rivals = rivals.copy()
             rivals["_pb_num"] = pd.to_numeric(rivals["pb_mark"], errors="coerce")
             rivals = rivals.sort_values("_pb_num", na_position="last")
             rivals = rivals.drop(columns=["_pb_num"])

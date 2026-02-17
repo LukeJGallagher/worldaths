@@ -127,6 +127,7 @@ def progression_chart(
     fig.update_layout(
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         hovermode="x unified",
+        margin=dict(l=60, r=20, t=50, b=50),
     )
 
     # Compute sensible Y-axis tick spacing based on data range
@@ -375,7 +376,8 @@ def championship_trends_chart(
         fig.update_yaxes(title="Performance")
 
     fig.update_xaxes(title="Championship Year", dtick=1)
-    fig.update_layout(height=450)
+    # Increase margins so axis titles don't overlap tick labels/dates
+    fig.update_layout(height=450, margin=dict(l=60, r=20, t=50, b=50))
     return fig
 
 
@@ -507,6 +509,7 @@ def round_performance_faceted_chart(
     _apply_base_layout(fig, title)
     fig.update_layout(
         height=300 * n_rows + 80,
+        margin=dict(l=60, r=20, t=60, b=50),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
     )
 
