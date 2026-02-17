@@ -29,3 +29,6 @@ kaleido>=0.2.1
 
 # Statistical analysis
 scipy>=1.11.0
+
+# Styling (background_gradient in pandas)
+matplotlib>=3.7.0
