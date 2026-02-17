@@ -129,8 +129,27 @@ def progression_chart(
         hovermode="x unified",
     )
 
-    # Normal axis: fastest time at bottom, improvement = line goes down
-    # This is the standard coaching convention in athletics
+    # Compute sensible Y-axis tick spacing based on data range
+    if valid_mask.sum() > 0:
+        y_min = float(y_vals[valid_mask].min())
+        y_max = float(y_vals[valid_mask].max())
+        y_range = y_max - y_min if y_max != y_min else 1.0
+        # Add 5% padding above and below
+        pad = y_range * 0.05 if y_range > 0 else 0.5
+        # Choose tick interval: aim for ~8-12 ticks
+        raw_step = y_range / 10.0
+        # Snap to a nice interval (0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5...)
+        nice_steps = [0.01, 0.02, 0.05, 0.1, 0.2, 0.25, 0.5, 1, 2, 5, 10, 20, 50]
+        dtick = min(nice_steps, key=lambda s: abs(s - raw_step)) if raw_step > 0 else 0.1
+        fig.update_yaxes(
+            dtick=dtick,
+            range=[y_min - pad, y_max + pad] if not lower_is_better else [y_max + pad, y_min - pad],
+            tickformat=".2f",
+            title="Performance",
+        )
+    else:
+        fig.update_yaxes(tickformat=".2f", title="Performance")
+
     return fig
 
 
