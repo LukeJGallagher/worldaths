@@ -1083,10 +1083,36 @@ class DataConnector:
 
         conditions = []
         if event:
-            safe_event = event.replace("'", "''")
-            conditions.append(f"event = '{safe_event}'")
+            # Rivals data uses slug format (100m, long-jump, 400mh).
+            # PBs use API format (100 Metres, Long Jump, 400 Metres Hurdles).
+            # Try multiple name variants to match.
+            from data.event_utils import format_event_name, display_to_db
+            variants = {event}
+            display = format_event_name(event)   # "100 Metres" -> "100m"
+            variants.add(display)
+            variants.add(display.lower())         # "100m", "shot put"
+            variants.add(display.lower().replace(" ", "-"))  # "shot-put"
+            db_fmt = display_to_db(display)       # "100-metres"
+            variants.add(db_fmt)
+            # Add shorthand slugs used by rivals scraper (e.g. 400mh, 3000msc)
+            slug = display.lower().replace(" ", "")  # "400mh", "3000msc"
+            variants.add(slug)
+            # Common slug patterns
+            slug2 = db_fmt.replace("-metres-hurdles", "mh").replace("-metres-steeplechase", "msc")
+            slug2 = slug2.replace("-metres", "m").replace("-", "-")
+            variants.add(slug2)
+            # Remove empty strings
+            variants.discard("")
+            safe_variants = [v.replace("'", "''") for v in variants]
+            conditions.append(f"event IN ({','.join(repr(v) for v in safe_variants)})")
         if gender:
-            conditions.append(f"gender = '{gender.upper()}'")
+            # Normalize gender: data has 'M'/'F', callers may pass 'male'/'female'
+            g = gender.strip().upper()
+            if g in ("MALE", "MEN", "M"):
+                g = "M"
+            elif g in ("FEMALE", "WOMEN", "F"):
+                g = "F"
+            conditions.append(f"gender = '{g}'")
         if region:
             safe_region = region.replace("'", "''")
             conditions.append(f"region = '{safe_region}'")
