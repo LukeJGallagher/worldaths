@@ -116,6 +116,14 @@ def _chart_to_b64(fig) -> Optional[str]:
         return None
 
 
+def _chart_to_html_snippet(fig) -> str:
+    """Convert a Plotly figure to an embeddable HTML snippet (fallback when Kaleido unavailable)."""
+    try:
+        return fig.to_html(include_plotlyjs="cdn", full_html=False)
+    except Exception:
+        return ""
+
+
 def build_wittw_report_html(
     event: str,
     gender_label: str,
@@ -240,10 +248,15 @@ def build_wittw_report_html(
                 f'style="width: 100%; border-radius: 8px;">'
             )
         else:
-            chart_html = (
-                '<p style="color: rgba(255,255,255,0.5); text-align: center; '
-                'padding: 2rem;">Chart export requires Kaleido package</p>'
-            )
+            # Fallback: embed interactive Plotly chart via JS
+            snippet = _chart_to_html_snippet(fig)
+            if snippet:
+                chart_html = f'<div style="border-radius: 8px; overflow: hidden;">{snippet}</div>'
+            else:
+                chart_html = (
+                    '<p style="color: rgba(255,255,255,0.5); text-align: center; '
+                    'padding: 2rem;">Chart export unavailable</p>'
+                )
     else:
         chart_html = (
             '<p style="color: rgba(255,255,255,0.5); text-align: center; '

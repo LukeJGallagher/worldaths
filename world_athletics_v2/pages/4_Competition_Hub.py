@@ -51,12 +51,27 @@ with tabs[0]:
         col1, col2, col3 = st.columns(3)
         with col1:
             start_date, end_date = date_range_filter(key="cal")
+        # Map display labels → actual codes in calendar.parquet
+        _CAL_CATEGORY_MAP = {
+            "All": None,
+            "Olympic/World Champs (OW)": "OW",
+            "Diamond League Final (DF)": "DF",
+            "Gold World (GW)": "GW",
+            "Gold Label (GL)": "GL",
+            "Category A": "A",
+            "Category B": "B",
+            "Category C": "C",
+            "Category D": "D",
+            "Category E": "E",
+            "Category F": "F",
+        }
         with col2:
-            ranking_cat = st.selectbox(
+            ranking_cat_label = st.selectbox(
                 "Ranking Category",
-                ["All", "Diamond League", "Gold", "Silver", "Bronze", "World Championships", "Olympic Games"],
+                list(_CAL_CATEGORY_MAP.keys()),
                 key="cal_cat",
             )
+            ranking_cat = _CAL_CATEGORY_MAP.get(ranking_cat_label)
         with col3:
             area_filter = st.selectbox(
                 "Area",
@@ -67,7 +82,7 @@ with tabs[0]:
         df_cal = dc.get_calendar(
             start_date=start_date,
             end_date=end_date,
-            ranking_category=None if ranking_cat == "All" else ranking_cat,
+            ranking_category=ranking_cat,
         )
 
         if len(df_cal) > 0:
@@ -196,15 +211,25 @@ with tabs[3]:
 
     # WA ranking points by competition category (official WA scoring)
     CATEGORY_POINTS = {
+        # WA category codes (as stored in calendar.parquet)
+        "OW": {"place_pts": "80-100", "avg": 100, "tier": "Major"},
+        "DF": {"place_pts": "80-100", "avg": 90, "tier": "Platinum"},
+        "GW": {"place_pts": "60-80", "avg": 70, "tier": "Gold"},
+        "GL": {"place_pts": "60-80", "avg": 65, "tier": "Gold"},
+        "A": {"place_pts": "40-60", "avg": 50, "tier": "Silver"},
+        "B": {"place_pts": "20-40", "avg": 30, "tier": "Bronze"},
+        "C": {"place_pts": "10-20", "avg": 15, "tier": "Bronze"},
+        "D": {"place_pts": "5-10", "avg": 8, "tier": "Basic"},
+        "E": {"place_pts": "2-5", "avg": 4, "tier": "Basic"},
+        "F": {"place_pts": "0-2", "avg": 1, "tier": "Basic"},
+        # Legacy label-based keys (fallback)
         "Diamond League": {"place_pts": "80-100", "avg": 90, "tier": "Platinum"},
-        "Continental Tour Gold": {"place_pts": "60-80", "avg": 70, "tier": "Gold"},
         "Gold": {"place_pts": "60-80", "avg": 70, "tier": "Gold"},
         "Silver": {"place_pts": "40-60", "avg": 50, "tier": "Silver"},
         "Bronze": {"place_pts": "20-40", "avg": 30, "tier": "Bronze"},
         "World Championships": {"place_pts": "80-100", "avg": 100, "tier": "Major"},
         "Olympic Games": {"place_pts": "80-100", "avg": 100, "tier": "Major"},
         "Asian Games": {"place_pts": "60-80", "avg": 75, "tier": "Continental"},
-        "Asian Indoor Championships": {"place_pts": "40-60", "avg": 50, "tier": "Continental"},
     }
 
     # WA Competition Category definitions (A-F system)
@@ -360,7 +385,7 @@ with tabs[3]:
                 column_config={
                     "Category": st.column_config.TextColumn("Code"),
                     "Full Name": st.column_config.TextColumn("Category Name", width="large"),
-                    "Place Points": st.column_config.NumberColumn("Place Pts", format="+%d"),
+                    "Place Points": st.column_config.NumberColumn("Place Pts", format="d"),
                     "Count": st.column_config.NumberColumn("Competitions"),
                 },
             )
@@ -534,9 +559,8 @@ A 10.15s 100m at Diamond League scores MORE than the same 10.15s at a Bronze mee
                                 pd.DataFrame(display_data),
                                 hide_index=True,
                                 column_config={
-                                    "WA Points": st.column_config.ProgressColumn(
-                                        "WA Points", min_value=0,
-                                        max_value=int(scored[score_col].max() * 1.1),
+                                    "WA Points": st.column_config.NumberColumn(
+                                        "WA Points", format=",.0f",
                                     ),
                                     "Competition": st.column_config.TextColumn("Competition", width="large"),
                                 },
@@ -659,8 +683,8 @@ A 10.15s 100m at Diamond League scores MORE than the same 10.15s at a Bronze mee
                         "area": st.column_config.TextColumn("Region"),
                         "start_date": st.column_config.TextColumn("Date"),
                         "ranking_category": st.column_config.TextColumn("Category"),
-                        "est_points": st.column_config.ProgressColumn(
-                            "Est. Points", min_value=0, max_value=100,
+                        "est_points": st.column_config.NumberColumn(
+                            "Est. Points", format="d",
                         ),
                     },
                     height=600,

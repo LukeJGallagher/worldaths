@@ -941,8 +941,11 @@ class DataConnector:
             conditions.append(f"UPPER(nat) = '{country.upper()}'")
 
         if finals_only:
-            # Finals positions are plain numbers (1-8), not 1sf3, 2h1, etc.
-            conditions.append("regexp_matches(CAST(pos AS VARCHAR), '^[0-9]+$')")
+            # Finals positions: plain numbers (1-8), or with f/ce suffix (1f1, 2ce1)
+            # Includes combined-event and final-round indicators for broader coverage
+            conditions.append(
+                "regexp_matches(CAST(pos AS VARCHAR), '^[0-9]+(f[0-9]*|ce[0-9]*)?$')"
+            )
 
         from data.event_utils import get_event_type
         event_type = get_event_type(event) if event else "time"
