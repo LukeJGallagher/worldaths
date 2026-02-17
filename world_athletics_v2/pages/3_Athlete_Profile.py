@@ -473,19 +473,21 @@ if len(progression) > 0:
     )
     progression = progression[progression["event"] == selected_prog_event]
 
-    # Display table
+    # Display table - cast year to int string to avoid "2024.0"
+    if "year" in progression.columns:
+        progression["year"] = pd.to_numeric(progression["year"], errors="coerce").fillna(0).astype(int).astype(str)
     prog_display = ["year", "event", "best_mark", "best_score", "venue", "n_comps"]
     prog_avail = [c for c in prog_display if c in progression.columns]
     st.dataframe(
         progression[prog_avail],
         hide_index=True,
         column_config={
-            "year": st.column_config.NumberColumn("Year", format="d"),
+            "year": st.column_config.TextColumn("Year"),
             "event": st.column_config.TextColumn("Event"),
             "best_mark": st.column_config.TextColumn("Best Mark"),
             "best_score": st.column_config.NumberColumn("WA Points", format=",.0f"),
             "venue": st.column_config.TextColumn("Venue"),
-            "n_comps": st.column_config.NumberColumn("Comps"),
+            "n_comps": st.column_config.NumberColumn("Comps", format=".0f"),
         },
     )
 

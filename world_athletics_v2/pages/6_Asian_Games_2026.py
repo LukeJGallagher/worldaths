@@ -466,7 +466,7 @@ with tabs[1]:
                 hide_index=True,
                 column_config={
                     "Athlete": st.column_config.TextColumn("Athlete", width="medium"),
-                    "# Comps": st.column_config.NumberColumn("Comps", format="d"),
+                    "# Comps": st.column_config.NumberColumn("Comps", format=".0f"),
                     "Status": st.column_config.TextColumn("Readiness"),
                 },
                 height=600,
@@ -739,7 +739,7 @@ with tabs[3]:
             "best5_avg": st.column_config.TextColumn("Best 5 Avg"),
             "latest_mark": st.column_config.TextColumn("Latest"),
             "latest_date": st.column_config.TextColumn("Last Date"),
-            "performances_count": st.column_config.NumberColumn("# Perfs", format="d"),
+            "performances_count": st.column_config.NumberColumn("# Perfs", format=".0f"),
         }
 
         # Summary metrics

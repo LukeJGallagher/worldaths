@@ -382,7 +382,7 @@ if len(rivals_df) > 0:
             "Nat": st.column_config.TextColumn("Nat", width="small"),
             "PB": st.column_config.TextColumn("PB"),
             "SB": st.column_config.TextColumn("SB"),
-            "# Perfs": st.column_config.NumberColumn("# Perfs", format="d"),
+            "# Perfs": st.column_config.NumberColumn("# Perfs", format=".0f"),
             "Latest Date": st.column_config.TextColumn("Latest Date"),
         },
         height=min(500, 35 * len(display_df) + 38),
