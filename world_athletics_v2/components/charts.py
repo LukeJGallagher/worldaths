@@ -722,3 +722,105 @@ def competition_points_chart(
     _apply_base_layout(fig, title)
     fig.update_yaxes(title="Average Ranking Points")
     return fig
+
+
+# ── Competition Strategy charts ───────────────────────────────────────
+
+
+def points_scenario_chart(
+    current_top5: list,
+    hypothetical_new: float | None = None,
+    title: str = "Top 5 Scoring Performances",
+) -> go.Figure:
+    """Bar chart of current top-5 scores with optional hypothetical replacement."""
+    top5 = sorted(current_top5, reverse=True)[:5]
+    labels = [f"#{i+1}" for i in range(len(top5))]
+    colors = [TEAL_PRIMARY] * len(top5)
+
+    if hypothetical_new is not None and len(top5) >= 5:
+        weakest = min(top5)
+        if hypothetical_new > weakest:
+            # Replace weakest, re-sort, highlight the new one
+            new_list = sorted(top5[:-1] + [hypothetical_new], reverse=True)
+            new_idx = new_list.index(hypothetical_new)
+            labels = [f"#{i+1}" for i in range(len(new_list))]
+            colors = [TEAL_PRIMARY] * len(new_list)
+            colors[new_idx] = GOLD_ACCENT
+            top5 = new_list
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=labels, y=top5,
+        marker_color=colors,
+        text=[f"{v:.0f}" for v in top5],
+        textposition="outside",
+    ))
+
+    avg = sum(top5) / len(top5) if top5 else 0
+    fig.add_hline(y=avg, line_dash="dash", line_color=GRAY_BLUE,
+                  annotation_text=f"Avg: {avg:.0f}", annotation_position="right")
+
+    _apply_base_layout(fig, title)
+    fig.update_yaxes(title="WA Ranking Points")
+    fig.update_layout(showlegend=False)
+    return fig
+
+
+def competition_timeline_chart(
+    competitions_df: pd.DataFrame,
+    deadlines: dict | None = None,
+    title: str = "Competition Calendar",
+) -> go.Figure:
+    """Horizontal timeline of competitions color-coded by category."""
+    from analytics.competition_strategy import CATEGORY_COLORS, CATEGORY_NAMES
+
+    fig = go.Figure()
+
+    if competitions_df.empty:
+        _apply_base_layout(fig, title)
+        return fig
+
+    df = competitions_df.head(25).copy()
+    df["start_dt"] = pd.to_datetime(df["start_date"], errors="coerce")
+    df = df.dropna(subset=["start_dt"]).sort_values("start_dt")
+
+    if df.empty:
+        _apply_base_layout(fig, title)
+        return fig
+
+    # Build bars
+    for _, row in df.iterrows():
+        cat = row.get("ranking_category", "F")
+        color = CATEGORY_COLORS.get(cat, "#CFD8DC")
+        cat_name = CATEGORY_NAMES.get(cat, cat)
+        name = str(row.get("name", ""))[:40]
+        venue = str(row.get("venue", ""))
+
+        fig.add_trace(go.Bar(
+            x=[1],
+            y=[name],
+            orientation="h",
+            marker_color=color,
+            hovertemplate=f"<b>{name}</b><br>{venue}<br>Cat: {cat_name}<br>Date: {row['start_date']}<extra></extra>",
+            showlegend=False,
+        ))
+
+    # Deadline markers
+    if deadlines:
+        for champ, info in deadlines.items():
+            dl = info.get("deadline", "")
+            if dl:
+                short_name = champ.split("(")[0].strip()
+                fig.add_vline(
+                    x=0, line_dash="dot", line_color=STATUS_DANGER,
+                    annotation_text=short_name, annotation_position="top",
+                )
+
+    _apply_base_layout(fig, title)
+    fig.update_layout(
+        barmode="stack",
+        yaxis=dict(autorange="reversed"),
+        showlegend=False,
+        height=max(400, len(df) * 28 + 80),
+    )
+    return fig

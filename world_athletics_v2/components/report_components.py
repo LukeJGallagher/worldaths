@@ -93,6 +93,14 @@ WC_TOKYO_2025_ENTRY_STANDARDS = {
 }
 
 
+# Qualification deadlines for target championships
+QUALIFICATION_DEADLINES = {
+    "World Champs 2025 (Tokyo)": {"deadline": "2025-09-01", "event_date": "2025-09-13"},
+    "Asian Games 2026 (Nagoya)": {"deadline": "2026-08-01", "event_date": "2026-09-19"},
+    "Olympics 2028 (Los Angeles)": {"deadline": "2028-06-01", "event_date": "2028-07-14"},
+}
+
+
 def get_championship_targets(event: str) -> Dict[str, Dict]:
     """Get championship-specific targets for an event.
 

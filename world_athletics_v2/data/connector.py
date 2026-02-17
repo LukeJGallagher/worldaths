@@ -1027,6 +1027,35 @@ class DataConnector:
         sql += " ORDER BY start_date ASC"
         return self.query(sql)
 
+    def get_calendar_for_event(
+        self,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        min_category: Optional[str] = None,
+        area: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """Get Track & Field competitions filtered for strategy planning."""
+        if "calendar" not in self._views_registered:
+            return pd.DataFrame()
+
+        conditions = ["disciplines ILIKE '%Track and Field%'"]
+        if start_date:
+            conditions.append(f"start_date >= '{start_date}'")
+        if end_date:
+            conditions.append(f"start_date <= '{end_date}'")
+        if area:
+            safe_area = area.replace("'", "''")
+            conditions.append(f"area = '{safe_area}'")
+        if min_category:
+            cat_order = ['OW', 'DF', 'GW', 'GL', 'A', 'B', 'C', 'D', 'E', 'F']
+            idx = cat_order.index(min_category) if min_category in cat_order else len(cat_order)
+            allowed = cat_order[:idx + 1]
+            conditions.append(f"ranking_category IN ({','.join(repr(c) for c in allowed)})")
+
+        sql = "SELECT * FROM calendar WHERE " + " AND ".join(conditions)
+        sql += " ORDER BY start_date ASC"
+        return self.query(sql)
+
     def get_upcoming_competitions(self) -> pd.DataFrame:
         """Get upcoming competitions."""
         if "upcoming" not in self._views_registered:
