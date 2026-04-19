@@ -36,6 +36,21 @@ data/scraped/*.parquet
 data/scraped/photos/
 *.db
 
+# Archive (old/unused files moved here for cleanup)
+Archive/
+
+# Claude Code
+.claude/
+
+# Generated output
+briefings/
+
+# Logs and temp data
+*.log
+pandasai.log
+mcp_info.txt
+temp_data/
+
 # Temp
 temp_gh/
 *.tmp

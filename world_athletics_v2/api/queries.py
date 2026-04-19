@@ -1,7 +1,7 @@
 """
 World Athletics GraphQL query strings.
 
-Updated 2026-02-13 for new API schema at graphql-prod-4843.edge.aws.
+Updated 2026-04-16 for new API schema at graphql-prod-4864.edge.aws.
 Key changes from old schema:
 - searchCompetitors: returns list directly (no 'results' wrapper)
 - getWorldRankings: 'sex' arg removed (gender encoded in eventGroup)

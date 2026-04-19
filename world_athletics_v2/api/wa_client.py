@@ -49,23 +49,35 @@ from .rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
 
-# API configuration (updated 2026-02-13 - WA migrated from prod.aws to edge.aws)
+# API configuration (updated 2026-04-16 - endpoint rotated from 4843 to 4864)
 # Key rotates periodically - set WA_GRAPHQL_URL and WA_API_KEY env vars to override
 import os as _os
 
-GRAPHQL_URL = _os.environ.get(
-    "WA_GRAPHQL_URL",
-    "https://graphql-prod-4843.edge.aws.worldathletics.org/graphql",
-)
-API_KEY = _os.environ.get("WA_API_KEY", "")
+_DEFAULT_URL = "https://graphql-prod-4864.edge.aws.worldathletics.org/graphql"
 
-HEADERS = {
-    "Content-Type": "application/json",
-    "Origin": "https://worldathletics.org",
-    "Referer": "https://worldathletics.org/",
-    "x-api-key": API_KEY,
-    "x-amz-user-agent": "aws-amplify/3.0.2",
-}
+
+def _get_graphql_url():
+    return _os.environ.get("WA_GRAPHQL_URL", _DEFAULT_URL)
+
+
+def _get_api_key():
+    return _os.environ.get("WA_API_KEY", "")
+
+
+def _get_headers():
+    return {
+        "Content-Type": "application/json",
+        "Origin": "https://worldathletics.org",
+        "Referer": "https://worldathletics.org/",
+        "x-api-key": _get_api_key(),
+        "x-amz-user-agent": "aws-amplify/3.0.2",
+    }
+
+
+# Module-level aliases for backward compatibility
+GRAPHQL_URL = _get_graphql_url()
+API_KEY = _get_api_key()
+HEADERS = _get_headers()
 
 
 class WAClient:
@@ -93,8 +105,8 @@ class WAClient:
             await self._limiter.acquire()
             try:
                 response = await self._client.post(
-                    GRAPHQL_URL,
-                    headers=HEADERS,
+                    _get_graphql_url(),
+                    headers=_get_headers(),
                     json={"query": query, "variables": variables or {}},
                 )
                 response.raise_for_status()
@@ -109,6 +121,7 @@ class WAClient:
                             "VariableTypeMismatch", "Not Authorized",
                             "ValidationError", "FieldUndefined",
                             "MissingFieldArgument", "SubSelectionRequired",
+                            "Cannot read properties of undefined",
                         )
                     )
                     if is_permanent:

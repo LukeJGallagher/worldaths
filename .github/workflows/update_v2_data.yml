@@ -2,7 +2,7 @@ name: Update v2 GraphQL Data
 
 on:
   schedule:
-    # Daily at 4 AM UTC (after legacy scrapers)
+    # Daily at 4 AM UTC
     - cron: '0 4 * * *'
   workflow_dispatch:
     inputs:
@@ -41,31 +41,63 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r world_athletics_v2/requirements.txt
+          pip install requests playwright
 
-      - name: Validate API key
+      - name: Install Playwright Chromium
+        run: playwright install chromium --with-deps
+
+      - name: Detect and validate API credentials
+        id: detect-key
         env:
           WA_API_KEY: ${{ secrets.WA_API_KEY }}
         run: |
           cd world_athletics_v2
           python -c "
-          import os
+          import os, sys
+          sys.path.insert(0, '.')
+          from api.key_updater import test_credentials, detect_credentials
+          from api.wa_client import _DEFAULT_URL
+
           key = os.environ.get('WA_API_KEY', '')
-          if not key:
-              print('ERROR: WA_API_KEY secret not set!')
-              print('Go to: Settings > Secrets > Actions > New repository secret')
-              print('Name: WA_API_KEY')
-              exit(1)
-          print(f'API key loaded (length: {len(key)})')
+          url = _DEFAULT_URL
+
+          # Try secret key + hardcoded URL first
+          if key and test_credentials(url, key):
+              print(f'GitHub Secret key valid at: {url.split(\"/\")[-2]}')
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                  f.write(f'WA_GRAPHQL_URL={url}\n')
+                  f.write(f'WA_API_KEY={key}\n')
+                  f.write('key_source=secret\n')
+              sys.exit(0)
+
+          # Auto-detect new credentials via Playwright
+          print('Secret credentials expired or missing. Auto-detecting...')
+          creds = detect_credentials()
+          if not creds:
+              print('ERROR: Failed to detect API credentials')
+              sys.exit(1)
+
+          if not test_credentials(creds['url'], creds['key']):
+              print('ERROR: Detected credentials failed validation')
+              sys.exit(1)
+
+          print(f'New credentials detected: {creds[\"url\"].split(\"/\")[-2]}')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f'WA_GRAPHQL_URL={creds[\"url\"]}\n')
+              f.write(f'WA_API_KEY={creds[\"key\"]}\n')
+              f.write('key_source=auto-detected\n')
           "
 
       - name: Run v2 scraper pipeline
         env:
-          WA_API_KEY: ${{ secrets.WA_API_KEY }}
+          WA_API_KEY: ${{ steps.detect-key.outputs.WA_API_KEY }}
+          WA_GRAPHQL_URL: ${{ steps.detect-key.outputs.WA_GRAPHQL_URL }}
         run: |
           cd world_athletics_v2
           MODE=${{ github.event.inputs.scrape_mode || 'daily' }}
           echo "Running v2 scraper in ${MODE} mode..."
-          python -m scrapers.pipeline --${MODE}
+          echo "API endpoint: ${WA_GRAPHQL_URL}"
+          python -u -m scrapers.pipeline --${MODE}
         timeout-minutes: 45
 
       - name: Upload scraped data to Azure Blob Storage
@@ -120,7 +152,8 @@ jobs:
             echo "No data changes to commit"
           else
             MODE=${{ github.event.inputs.scrape_mode || 'daily' }}
-            git commit -m "Auto-update: v2 ${MODE} data refresh $(date +'%Y-%m-%d')"
+            KEY_SOURCE=${{ steps.detect-key.outputs.key_source }}
+            git commit -m "Auto-update: v2 ${MODE} data refresh $(date +'%Y-%m-%d') [key: ${KEY_SOURCE}]"
             git push
           fi
 
@@ -136,9 +169,11 @@ jobs:
       - name: Summary
         run: |
           MODE=${{ github.event.inputs.scrape_mode || 'daily' }}
+          KEY_SOURCE=${{ steps.detect-key.outputs.key_source }}
           echo "## v2 GraphQL Data Update" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Mode:** ${MODE}" >> $GITHUB_STEP_SUMMARY
+          echo "**API Key Source:** ${KEY_SOURCE}" >> $GITHUB_STEP_SUMMARY
           echo "**Date:** $(date +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 

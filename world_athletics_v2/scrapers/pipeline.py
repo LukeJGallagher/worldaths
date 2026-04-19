@@ -36,11 +36,26 @@ OUTPUT_DIR = Path(__file__).parent.parent / "data" / "scraped"
 AZURE_DIR = "personal-data/athletics"
 
 
+def _ensure_api_credentials():
+    """Check API credentials and auto-detect if expired."""
+    try:
+        from api.key_updater import ensure_valid_credentials
+        creds = ensure_valid_credentials()
+        # Reload wa_client module to pick up new env vars
+        import importlib
+        import api.wa_client as _wac
+        importlib.reload(_wac)
+    except Exception as e:
+        print(f"  WARNING: Key auto-detection failed: {e}")
+        print("  Continuing with existing credentials...")
+
+
 async def run_initial_scrape():
     """First-time deep scrape: everything."""
     print(f"\n{'#'*60}")
     print(f"# INITIAL DEEP SCRAPE - {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print(f"{'#'*60}")
+    _ensure_api_credentials()
 
     import pandas as pd
     from scrapers.scrape_athletes import scrape_ksa_athletes, scrape_rivals, _get_full_name
@@ -164,6 +179,7 @@ async def run_daily_update():
     print(f"\n{'#'*60}")
     print(f"# DAILY UPDATE - {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print(f"{'#'*60}")
+    _ensure_api_credentials()
 
     import pandas as pd
     from scrapers.scrape_athletes import scrape_ksa_athletes
