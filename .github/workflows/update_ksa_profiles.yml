@@ -42,8 +42,9 @@ jobs:
           WA_API_KEY: ${{ secrets.WA_API_KEY }}
         run: |
           cd world_athletics_v2
-          python -c "
-          import os, sys
+          python -u -c "
+          import os, sys, socket
+          from urllib.parse import urlparse
           sys.path.insert(0, '.')
           from api.key_updater import test_credentials, detect_credentials
           from api.wa_client import _DEFAULT_URL
@@ -51,16 +52,33 @@ jobs:
           key = os.environ.get('WA_API_KEY', '')
           url = _DEFAULT_URL
 
-          if key and test_credentials(url, key):
-              print(f'Secret key valid')
-              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                  f.write(f'WA_GRAPHQL_URL={url}\n')
-                  f.write(f'WA_API_KEY={key}\n')
-              sys.exit(0)
+          # Check DNS for default URL
+          hostname = urlparse(url).hostname
+          dns_ok = True
+          try:
+              socket.getaddrinfo(hostname, 443)
+              print(f'DNS OK: {hostname}')
+          except socket.gaierror:
+              print(f'DNS FAILED for {hostname}')
+              dns_ok = False
 
+          # Try secret key if DNS works
+          if key and dns_ok:
+              try:
+                  if test_credentials(url, key):
+                      print('Secret key valid')
+                      with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                          f.write(f'WA_GRAPHQL_URL={url}\n')
+                          f.write(f'WA_API_KEY={key}\n')
+                      sys.exit(0)
+              except Exception as e:
+                  print(f'Secret key test error: {e}')
+
+          # Auto-detect via Playwright
           print('Auto-detecting credentials...')
-          creds = detect_credentials()
+          creds = detect_credentials(timeout_ms=30000)
           if creds and test_credentials(creds['url'], creds['key']):
+              print(f'Auto-detected: {creds[\"url\"].split(\"/\")[-2]}')
               with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
                   f.write(f'WA_GRAPHQL_URL={creds[\"url\"]}\n')
                   f.write(f'WA_API_KEY={creds[\"key\"]}\n')
@@ -68,6 +86,7 @@ jobs:
               print('ERROR: Could not obtain valid credentials')
               sys.exit(1)
           "
+        timeout-minutes: 5
 
       - name: Scrape KSA athlete profiles
         env:
@@ -75,6 +94,7 @@ jobs:
           WA_GRAPHQL_URL: ${{ steps.detect-key.outputs.WA_GRAPHQL_URL }}
         run: |
           cd world_athletics_v2
+          echo "API endpoint: ${WA_GRAPHQL_URL}"
           python -u -c "
           import asyncio, platform, sys, json
           sys.path.insert(0, '.')
@@ -104,17 +124,6 @@ jobs:
                   with open(json_path, 'w', encoding='utf-8') as f:
                       json.dump(profiles, f, ensure_ascii=False, indent=2, default=str)
 
-                  # Update men's rankings from KSA profiles
-                  df_ksa_ranks = extract_rankings_from_profiles(profiles, source_label='ksa_profile')
-                  mens_path = OUTPUT_DIR / 'mens_rankings.parquet'
-                  if mens_path.exists():
-                      df_existing = pd.read_parquet(mens_path)
-                      df_existing = df_existing[df_existing['source'] != 'ksa_profile']
-                      df_combined = pd.concat([df_ksa_ranks[df_ksa_ranks['gender'] == 'M'], df_existing], ignore_index=True)
-                      df_combined = df_combined.drop_duplicates(subset=['athlete_id', 'event_slug'], keep='first')
-                      df_combined = df_combined.sort_values(['event_slug', 'rank'])
-                      df_combined.to_parquet(mens_path, index=False, engine='pyarrow')
-
                   print(f'Done: {len(profiles)} profiles scraped')
 
           if platform.system() == 'Windows':
@@ -141,7 +150,6 @@ jobs:
 
           git add world_athletics_v2/data/scraped/ksa_*.parquet || true
           git add world_athletics_v2/data/scraped/ksa_deep_profiles.json || true
-          git add world_athletics_v2/data/scraped/mens_rankings.parquet || true
 
           if git diff --staged --quiet; then
             echo "No changes to commit"
@@ -151,6 +159,7 @@ jobs:
           fi
 
       - name: Summary
+        if: always()
         run: |
           echo "## KSA Athlete Profiles Update" >> $GITHUB_STEP_SUMMARY
           echo "**Date:** $(date +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY

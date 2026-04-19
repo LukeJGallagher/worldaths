@@ -52,8 +52,9 @@ jobs:
           WA_API_KEY: ${{ secrets.WA_API_KEY }}
         run: |
           cd world_athletics_v2
-          python -c "
-          import os, sys
+          python -u -c "
+          import os, sys, socket
+          from urllib.parse import urlparse
           sys.path.insert(0, '.')
           from api.key_updater import test_credentials, detect_credentials
           from api.wa_client import _DEFAULT_URL
@@ -61,31 +62,77 @@ jobs:
           key = os.environ.get('WA_API_KEY', '')
           url = _DEFAULT_URL
 
+          print(f'Default URL: {url}')
+          print(f'Secret key set: {bool(key)}')
+
+          # Check DNS for default URL first
+          hostname = urlparse(url).hostname
+          try:
+              socket.getaddrinfo(hostname, 443)
+              print(f'DNS OK: {hostname}')
+          except socket.gaierror as e:
+              print(f'DNS FAILED for {hostname}: {e}')
+              print('Default URL unreachable - will auto-detect via Playwright')
+              key = ''  # Force auto-detect
+
           # Try secret key + hardcoded URL first
-          if key and test_credentials(url, key):
-              print(f'GitHub Secret key valid at: {url.split(\"/\")[-2]}')
-              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                  f.write(f'WA_GRAPHQL_URL={url}\n')
-                  f.write(f'WA_API_KEY={key}\n')
-                  f.write('key_source=secret\n')
-              sys.exit(0)
+          if key:
+              try:
+                  if test_credentials(url, key):
+                      print(f'GitHub Secret key valid at: {url.split(\"/\")[-2]}')
+                      with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                          f.write(f'WA_GRAPHQL_URL={url}\n')
+                          f.write(f'WA_API_KEY={key}\n')
+                          f.write('key_source=secret\n')
+                      sys.exit(0)
+                  else:
+                      print('Secret key failed validation')
+              except Exception as e:
+                  print(f'Secret key test error: {e}')
 
           # Auto-detect new credentials via Playwright
-          print('Secret credentials expired or missing. Auto-detecting...')
-          creds = detect_credentials()
+          print('Auto-detecting credentials via Playwright...')
+          creds = detect_credentials(timeout_ms=30000)
           if not creds:
               print('ERROR: Failed to detect API credentials')
+              print('Ensure worldathletics.org is accessible and Playwright works')
               sys.exit(1)
+
+          print(f'Detected URL: {creds[\"url\"]}')
+          print(f'Detected key: {creds[\"key\"][:12]}...')
 
           if not test_credentials(creds['url'], creds['key']):
               print('ERROR: Detected credentials failed validation')
               sys.exit(1)
 
-          print(f'New credentials detected: {creds[\"url\"].split(\"/\")[-2]}')
+          print(f'Credentials validated OK')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
               f.write(f'WA_GRAPHQL_URL={creds[\"url\"]}\n')
               f.write(f'WA_API_KEY={creds[\"key\"]}\n')
               f.write('key_source=auto-detected\n')
+          "
+        timeout-minutes: 5
+
+      - name: Verify credentials before pipeline
+        env:
+          WA_API_KEY: ${{ steps.detect-key.outputs.WA_API_KEY }}
+          WA_GRAPHQL_URL: ${{ steps.detect-key.outputs.WA_GRAPHQL_URL }}
+        run: |
+          echo "API endpoint: ${WA_GRAPHQL_URL}"
+          echo "Key source: ${{ steps.detect-key.outputs.key_source }}"
+          echo "Key length: ${#WA_API_KEY}"
+
+          # DNS pre-check
+          HOSTNAME=$(python -c "from urllib.parse import urlparse; print(urlparse('${WA_GRAPHQL_URL}').hostname)")
+          echo "Resolving ${HOSTNAME}..."
+          python -c "
+          import socket
+          try:
+              addrs = socket.getaddrinfo('${HOSTNAME}', 443)
+              print(f'DNS OK: {addrs[0][4][0]}')
+          except Exception as e:
+              print(f'DNS FAILED: {e}')
+              exit(1)
           "
 
       - name: Run v2 scraper pipeline
@@ -167,6 +214,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Summary
+        if: always()
         run: |
           MODE=${{ github.event.inputs.scrape_mode || 'daily' }}
           KEY_SOURCE=${{ steps.detect-key.outputs.key_source }}

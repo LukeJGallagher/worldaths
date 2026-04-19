@@ -38,16 +38,38 @@ AZURE_DIR = "personal-data/athletics"
 
 def _ensure_api_credentials():
     """Check API credentials and auto-detect if expired."""
+    from api.wa_client import _get_graphql_url, _get_api_key
+
+    url = _get_graphql_url()
+    key = _get_api_key()
+    print(f"  API URL: {url}")
+    print(f"  API Key: {key[:12]}..." if key else "  API Key: (not set)")
+
+    # Pre-check DNS resolution
+    if url:
+        from urllib.parse import urlparse
+        import socket
+        hostname = urlparse(url).hostname
+        try:
+            socket.getaddrinfo(hostname, 443, socket.AF_UNSPEC, socket.SOCK_STREAM)
+            print(f"  DNS OK: {hostname}")
+        except socket.gaierror as e:
+            print(f"  DNS FAILED for {hostname}: {e}")
+            print("  Will attempt auto-detection via Playwright...")
+
     try:
         from api.key_updater import ensure_valid_credentials
         creds = ensure_valid_credentials()
-        # Reload wa_client module to pick up new env vars
-        import importlib
-        import api.wa_client as _wac
-        importlib.reload(_wac)
+        # Update env vars so wa_client picks them up dynamically
+        os.environ["WA_GRAPHQL_URL"] = creds["url"]
+        os.environ["WA_API_KEY"] = creds["key"]
+        print(f"  Using: {creds['url'].split('/')[-2]}")
     except Exception as e:
-        print(f"  WARNING: Key auto-detection failed: {e}")
-        print("  Continuing with existing credentials...")
+        print(f"  WARNING: Key validation/detection failed: {e}")
+        if not key:
+            print("  ERROR: No API key available. Pipeline will likely fail.")
+        else:
+            print("  Continuing with existing credentials...")
 
 
 async def run_initial_scrape():

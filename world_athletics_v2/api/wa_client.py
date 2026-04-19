@@ -141,6 +141,15 @@ class WAClient:
                     continue
                 raise
             except httpx.RequestError as e:
+                error_str = str(e)
+                # DNS resolution failures are permanent - don't waste retries
+                if "Name or service not known" in error_str or "getaddrinfo failed" in error_str:
+                    url = _get_graphql_url()
+                    raise RuntimeError(
+                        f"DNS resolution failed for {url}. "
+                        f"The API endpoint may have changed. "
+                        f"Set WA_GRAPHQL_URL env var or run: python -m api.key_updater --update"
+                    ) from e
                 logger.warning(f"Request error (attempt {attempt + 1}): {e}")
                 if attempt < self._max_retries:
                     await asyncio.sleep(self._limiter.get_backoff_delay(attempt))
