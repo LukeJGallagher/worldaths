@@ -158,6 +158,22 @@ class DataConnector:
         else:
             logger.info("Data mode: Local files")
 
+    def _download_blob_to_file(self, blob_client, local_path: Path):
+        """Download a blob to a local file using chunked streaming for large files."""
+        props = blob_client.get_blob_properties()
+        size_mb = props.size / (1024 * 1024)
+
+        if size_mb > 10:
+            # Stream large files in chunks to avoid memory issues
+            logger.info(f"Downloading {local_path.name} ({size_mb:.1f} MB) in chunks...")
+            stream = blob_client.download_blob()
+            with open(local_path, "wb") as f:
+                for chunk in stream.chunks():
+                    f.write(chunk)
+        else:
+            data = blob_client.download_blob().readall()
+            local_path.write_bytes(data)
+
     def _download_from_azure(self, conn_str: str):
         """Download parquet files from Azure Blob Storage if missing locally."""
         try:
@@ -200,11 +216,10 @@ class DataConnector:
             if not local_path.exists():
                 try:
                     blob = client.get_blob_client(blob_path)
-                    data = blob.download_blob().readall()
-                    local_path.write_bytes(data)
-                    logger.info(f"Downloaded {blob_path} -> {local_path}")
+                    self._download_blob_to_file(blob, local_path)
+                    logger.info(f"Downloaded {blob_path} ({local_path.stat().st_size / 1024:.0f} KB)")
                 except Exception as e:
-                    logger.debug(f"Blob not found: {blob_path} ({e})")
+                    logger.warning(f"Failed to download {blob_path}: {e}")
 
         # Download legacy files to LEGACY_DATA_DIR
         LEGACY_DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -213,11 +228,10 @@ class DataConnector:
             if not local_path.exists():
                 try:
                     blob = client.get_blob_client(blob_path)
-                    data = blob.download_blob().readall()
-                    local_path.write_bytes(data)
-                    logger.info(f"Downloaded {blob_path} -> {local_path}")
+                    self._download_blob_to_file(blob, local_path)
+                    logger.info(f"Downloaded {blob_path} ({local_path.stat().st_size / 1024:.0f} KB)")
                 except Exception as e:
-                    logger.debug(f"Blob not found: {blob_path} ({e})")
+                    logger.warning(f"Failed to download legacy {blob_path}: {e}")
 
     def _register_views(self):
         """Register DuckDB views for available parquet files."""
