@@ -259,6 +259,30 @@ async def run_weekly_full():
     await run_initial_scrape()
 
 
+def _validate_parquet_files():
+    """Check all parquet files for corruption. Delete any that can't be read."""
+    if not OUTPUT_DIR.exists():
+        return
+
+    import pandas as pd
+    corrupt = []
+    for f in sorted(OUTPUT_DIR.glob("*.parquet")):
+        try:
+            pd.read_parquet(f)
+        except Exception as e:
+            print(f"   CORRUPT: {f.name} - {e}")
+            corrupt.append(f)
+
+    if corrupt:
+        print(f"\n   Removing {len(corrupt)} corrupt file(s) to prevent bad data...")
+        for f in corrupt:
+            f.unlink()
+            print(f"   Deleted: {f.name}")
+        print("   These will be regenerated on next scrape run.")
+
+    return corrupt
+
+
 def _print_summary():
     """Print summary of scraped files."""
     print(f"\n{'='*60}")
@@ -273,7 +297,7 @@ def _print_summary():
                 size_kb = f.stat().st_size / 1024
                 print(f"   {f.name:40s} {len(df):>8,} rows  ({size_kb:.1f} KB)")
             except Exception:
-                print(f"   {f.name:40s} (error reading)")
+                print(f"   {f.name:40s} (CORRUPT - will be regenerated)")
 
 
 def upload_to_azure():
@@ -313,12 +337,18 @@ async def main():
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+    # Pre-flight: detect and remove any corrupt parquet files
+    _validate_parquet_files()
+
     if args.initial:
         await run_initial_scrape()
     elif args.daily:
         await run_daily_update()
     elif args.weekly:
         await run_weekly_full()
+
+    # Post-flight: verify all output files are readable
+    _validate_parquet_files()
 
     if args.upload:
         upload_to_azure()

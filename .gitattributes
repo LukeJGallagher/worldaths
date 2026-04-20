@@ -1,0 +1,8 @@
+# Binary files - never attempt text merge (prevents corruption)
+*.parquet binary merge=ours
+*.db binary merge=ours
+*.sqlite binary merge=ours
+*.pkl binary merge=ours
+
+# JSON data files - keep latest version on conflict
+world_athletics_v2/data/scraped/*.json merge=ours
