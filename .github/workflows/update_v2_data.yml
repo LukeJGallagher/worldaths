@@ -46,6 +46,43 @@ jobs:
       - name: Install Playwright Chromium
         run: playwright install chromium --with-deps
 
+      - name: Fix DNS for World Athletics API
+        run: |
+          # The WA GraphQL API uses CloudFront edge domains that don't resolve
+          # from GitHub Actions runners. Resolve via Google DNS and add to /etc/hosts.
+          WA_HOST="graphql-prod-4864.edge.aws.worldathletics.org"
+
+          echo "Checking DNS for ${WA_HOST}..."
+          if host ${WA_HOST} > /dev/null 2>&1; then
+            echo "DNS resolves natively - no fix needed"
+          else
+            echo "DNS fails natively - resolving via Google DNS (8.8.8.8)..."
+            IP=$(dig +short ${WA_HOST} @8.8.8.8 A | head -1)
+            if [ -n "$IP" ]; then
+              echo "${IP} ${WA_HOST}" | sudo tee -a /etc/hosts
+              echo "Added ${WA_HOST} -> ${IP} to /etc/hosts"
+            else
+              echo "WARNING: Could not resolve via Google DNS either"
+              # Try CloudFront distribution directly
+              CF_IP=$(dig +short d2bivqi363mb07.cloudfront.net @8.8.8.8 A | head -1)
+              if [ -n "$CF_IP" ]; then
+                echo "${CF_IP} ${WA_HOST}" | sudo tee -a /etc/hosts
+                echo "Added ${WA_HOST} -> ${CF_IP} (via CloudFront) to /etc/hosts"
+              fi
+            fi
+
+            # Verify fix
+            python -c "
+            import socket
+            try:
+                addrs = socket.getaddrinfo('${WA_HOST}', 443)
+                print(f'DNS fix verified: {addrs[0][4][0]}')
+            except Exception as e:
+                print(f'DNS still failing: {e}')
+                exit(1)
+            "
+          fi
+
       - name: Detect and validate API credentials
         id: detect-key
         env:
@@ -53,8 +90,7 @@ jobs:
         run: |
           cd world_athletics_v2
           python -u -c "
-          import os, sys, socket
-          from urllib.parse import urlparse
+          import os, sys
           sys.path.insert(0, '.')
           from api.key_updater import test_credentials, detect_credentials
           from api.wa_client import _DEFAULT_URL
@@ -64,16 +100,6 @@ jobs:
 
           print(f'Default URL: {url}')
           print(f'Secret key set: {bool(key)}')
-
-          # Check DNS for default URL first
-          hostname = urlparse(url).hostname
-          try:
-              socket.getaddrinfo(hostname, 443)
-              print(f'DNS OK: {hostname}')
-          except socket.gaierror as e:
-              print(f'DNS FAILED for {hostname}: {e}')
-              print('Default URL unreachable - will auto-detect via Playwright')
-              key = ''  # Force auto-detect
 
           # Try secret key + hardcoded URL first
           if key:
@@ -95,7 +121,6 @@ jobs:
           creds = detect_credentials(timeout_ms=30000)
           if not creds:
               print('ERROR: Failed to detect API credentials')
-              print('Ensure worldathletics.org is accessible and Playwright works')
               sys.exit(1)
 
           print(f'Detected URL: {creds[\"url\"]}')
@@ -113,27 +138,24 @@ jobs:
           "
         timeout-minutes: 5
 
-      - name: Verify credentials before pipeline
+      - name: Fix DNS for detected endpoint
         env:
-          WA_API_KEY: ${{ steps.detect-key.outputs.WA_API_KEY }}
           WA_GRAPHQL_URL: ${{ steps.detect-key.outputs.WA_GRAPHQL_URL }}
         run: |
-          echo "API endpoint: ${WA_GRAPHQL_URL}"
-          echo "Key source: ${{ steps.detect-key.outputs.key_source }}"
-          echo "Key length: ${#WA_API_KEY}"
+          # If Playwright detected a different endpoint, fix DNS for that too
+          DETECTED_HOST=$(python -c "from urllib.parse import urlparse; print(urlparse('${WA_GRAPHQL_URL}').hostname)")
+          echo "Detected endpoint host: ${DETECTED_HOST}"
 
-          # DNS pre-check
-          HOSTNAME=$(python -c "from urllib.parse import urlparse; print(urlparse('${WA_GRAPHQL_URL}').hostname)")
-          echo "Resolving ${HOSTNAME}..."
-          python -c "
-          import socket
-          try:
-              addrs = socket.getaddrinfo('${HOSTNAME}', 443)
-              print(f'DNS OK: {addrs[0][4][0]}')
-          except Exception as e:
-              print(f'DNS FAILED: {e}')
-              exit(1)
-          "
+          if ! host ${DETECTED_HOST} > /dev/null 2>&1; then
+            echo "DNS fails for detected host - resolving via Google DNS..."
+            IP=$(dig +short ${DETECTED_HOST} @8.8.8.8 A | head -1)
+            if [ -n "$IP" ]; then
+              echo "${IP} ${DETECTED_HOST}" | sudo tee -a /etc/hosts
+              echo "Added ${DETECTED_HOST} -> ${IP} to /etc/hosts"
+            fi
+          else
+            echo "DNS OK for ${DETECTED_HOST}"
+          fi
 
       - name: Run v2 scraper pipeline
         env:
@@ -144,6 +166,7 @@ jobs:
           MODE=${{ github.event.inputs.scrape_mode || 'daily' }}
           echo "Running v2 scraper in ${MODE} mode..."
           echo "API endpoint: ${WA_GRAPHQL_URL}"
+          echo "API key length: ${#WA_API_KEY}"
           python -u -m scrapers.pipeline --${MODE}
         timeout-minutes: 45
 

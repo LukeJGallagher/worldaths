@@ -36,6 +36,23 @@ jobs:
       - name: Install Playwright Chromium
         run: playwright install chromium --with-deps
 
+      - name: Fix DNS for World Athletics API
+        run: |
+          WA_HOST="graphql-prod-4864.edge.aws.worldathletics.org"
+          if host ${WA_HOST} > /dev/null 2>&1; then
+            echo "DNS resolves natively"
+          else
+            echo "Fixing DNS via Google DNS (8.8.8.8)..."
+            IP=$(dig +short ${WA_HOST} @8.8.8.8 A | head -1)
+            if [ -z "$IP" ]; then
+              IP=$(dig +short d2bivqi363mb07.cloudfront.net @8.8.8.8 A | head -1)
+            fi
+            if [ -n "$IP" ]; then
+              echo "${IP} ${WA_HOST}" | sudo tee -a /etc/hosts
+              echo "Added ${WA_HOST} -> ${IP}"
+            fi
+          fi
+
       - name: Detect API credentials
         id: detect-key
         env:
